@@ -1,0 +1,37 @@
+on: [push, pull_request]
+name: Build
+jobs:
+  build:
+    strategy:
+      matrix:
+        rust:
+          - stable
+          - beta
+          - nightly
+          - 1.85.0  # MSRV
+      fail-fast: false
+    runs-on: ubuntu-latest
+    env:
+      RUSTFLAGS: "-D warnings"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.rust }}
+
+      - name: Build (default features)
+        run: cargo build --verbose --all
+      - name: Build (no default features)
+        run: cargo build --verbose --all --no-default-features
+
+      - name: Build (debug feature)
+        run: cargo build --verbose --all --no-default-features --features=debug
+      - name: Build (get-size2 feature)
+        run: cargo build --verbose --all --no-default-features --features=get-size2
+      - name: Build (raw feature)
+        run: cargo build --verbose --all --no-default-features --features=raw
+      - name: Build (serde feature)
+        run: cargo build --verbose --all --no-default-features --features=serde
+
+      - name: Build (all features)
+        run: cargo build --verbose --all --all-features
