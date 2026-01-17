@@ -1,0 +1,30 @@
+[package]
+name = "blazinterner"
+description = "Efficient and concurrent interning of generic data"
+version = "0.1.0"
+authors = ["Guillaume Endignoux <ggendx@gmail.com>"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/gendx/blazinterner"
+categories = ["caching", "memory-management", "concurrency"]
+keywords = ["arena", "interning", "interner"]
+exclude = [".github/*"]
+edition = "2024"
+rust-version = "1.85.0"
+
+[package.metadata.docs.rs]
+features = ["debug", "get-size2", "raw", "serde"]
+rustdoc-args = ["--cfg", "docsrs", "--generate-link-to-definition"]
+
+[features]
+default = []
+debug = ["get-size2"]
+get-size2 = ["dep:get-size2"]
+raw = []
+serde = ["dep:serde"]
+
+[dependencies]
+appendvec = "0.1.1"
+dashtable = "0.1.0"
+get-size2 = { optional = true, version = "0.7.3" }
+hashbrown = "0.16.1"
+serde = { optional = true, version = "1.0.228", features = ["derive"] }
