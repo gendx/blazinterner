@@ -43,7 +43,6 @@ use std::hash::{BuildHasher, Hash, Hasher};
 use std::marker::PhantomData;
 #[cfg(feature = "get-size2")]
 use std::mem::size_of;
-use std::ops::{Deref, DerefMut};
 #[cfg(feature = "debug")]
 use std::sync::atomic::{self, AtomicUsize};
 
@@ -520,6 +519,8 @@ where
                 vec: AppendVec::with_capacity(size_hint),
                 map: DashTable::with_capacity(size_hint),
                 hasher: DefaultHashBuilder::default(),
+                #[cfg(feature = "debug")]
+                references: AtomicUsize::new(0),
                 _phantom: PhantomData,
             },
         };
