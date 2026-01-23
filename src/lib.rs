@@ -26,6 +26,7 @@
 //!   exclusive write lock.
 
 #![forbid(missing_docs, unsafe_code)]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 
 use appendvec::AppendVec;
 use dashtable::DashTable;
