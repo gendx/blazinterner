@@ -28,8 +28,13 @@
 #![forbid(missing_docs, unsafe_code)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
+#[cfg(feature = "delta")]
+mod delta;
+
 use appendvec::AppendVec;
 use dashtable::DashTable;
+#[cfg(feature = "delta")]
+pub use delta::{Accumulator, DeltaEncoding};
 #[cfg(feature = "get-size2")]
 use get_size2::{GetSize, GetSizeTracker};
 use hashbrown::DefaultHashBuilder;

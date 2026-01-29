@@ -12,12 +12,13 @@ edition = "2024"
 rust-version = "1.85.0"
 
 [package.metadata.docs.rs]
-features = ["debug", "get-size2", "raw", "serde"]
+features = ["debug", "delta", "get-size2", "raw", "serde"]
 rustdoc-args = ["--cfg", "docsrs", "--generate-link-to-definition"]
 
 [features]
 default = []
 debug = ["get-size2"]
+delta = []
 get-size2 = ["dep:get-size2"]
 raw = []
 serde = ["dep:serde"]

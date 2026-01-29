@@ -26,6 +26,8 @@ jobs:
 
       - name: Build (debug feature)
         run: cargo build --verbose --all --no-default-features --features=debug
+      - name: Build (delta feature)
+        run: cargo build --verbose --all --no-default-features --features=delta
       - name: Build (get-size2 feature)
         run: cargo build --verbose --all --no-default-features --features=get-size2
       - name: Build (raw feature)
