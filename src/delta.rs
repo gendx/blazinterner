@@ -1,4 +1,7 @@
+#[cfg(feature = "get-size2")]
+use get_size2::{GetSize, GetSizeTracker};
 use std::borrow::Borrow;
+use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 
@@ -20,8 +23,8 @@ pub trait Accumulator: Default {
     fn unfold(&mut self, d: Self::Delta) -> Self::Storage;
 }
 
-/// Wrapper around an [`Arena`] that uses the given [`Accumulator`] to
-/// serialize it with delta encoding.
+/// Wrapper around an [`Arena`](crate::Arena) that uses the given
+/// [`Accumulator`] to serialize it with delta encoding.
 #[derive(Default)]
 pub struct DeltaEncoding<T, Accum> {
     inner: T,
@@ -39,6 +42,52 @@ impl<T, Accum> Deref for DeltaEncoding<T, Accum> {
 impl<T, Accum> DerefMut for DeltaEncoding<T, Accum> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.inner
+    }
+}
+
+impl<T, Accum> Debug for DeltaEncoding<T, Accum>
+where
+    T: Debug,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.inner.fmt(f)
+    }
+}
+
+impl<T, Accum> PartialEq for DeltaEncoding<T, Accum>
+where
+    T: PartialEq,
+{
+    fn eq(&self, other: &Self) -> bool {
+        self.inner.eq(&other.inner)
+    }
+}
+
+impl<T, Accum> Eq for DeltaEncoding<T, Accum> where T: Eq {}
+
+#[cfg(feature = "get-size2")]
+impl<T, Accum> GetSize for DeltaEncoding<T, Accum>
+where
+    T: GetSize,
+{
+    fn get_stack_size() -> usize {
+        T::get_stack_size()
+    }
+
+    fn get_heap_size(&self) -> usize {
+        self.inner.get_heap_size()
+    }
+
+    fn get_heap_size_with_tracker<Tr: GetSizeTracker>(&self, tracker: Tr) -> (usize, Tr) {
+        self.inner.get_size_with_tracker(tracker)
+    }
+
+    fn get_size(&self) -> usize {
+        self.inner.get_size()
+    }
+
+    fn get_size_with_tracker<Tr: GetSizeTracker>(&self, tracker: Tr) -> (usize, Tr) {
+        self.inner.get_size_with_tracker(tracker)
     }
 }
 

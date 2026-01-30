@@ -26,6 +26,6 @@ serde = ["dep:serde"]
 [dependencies]
 appendvec = "0.1.1"
 dashtable = "0.1.0"
-get-size2 = { optional = true, version = "0.7.3" }
+get-size2 = { optional = true, version = "0.7.4" }
 hashbrown = "0.16.1"
 serde = { optional = true, version = "1.0.228", features = ["derive"] }
