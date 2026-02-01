@@ -13,22 +13,24 @@ pub trait Accumulator: Default {
     type Storage: Borrow<Self::Value>;
     /// Delta produced by this accumulator.
     type Delta;
+    /// Storage type of the delta produced by this accumulator.
+    type DeltaStorage: Borrow<Self::Delta>;
 
     /// Helper function for serialization: accumulate the given value and
     /// returns the corresponding delta.
-    fn fold(&mut self, v: &Self::Value) -> Self::Delta;
+    fn fold(&mut self, v: &Self::Value) -> Self::DeltaStorage;
 
     /// Helper function for deserialization: accumulate the given delta and
     /// returns the corresponding value.
-    fn unfold(&mut self, d: Self::Delta) -> Self::Storage;
+    fn unfold(&mut self, d: &Self::Delta) -> Self::Storage;
 }
 
 /// Wrapper around an [`Arena`](crate::Arena) that uses the given
 /// [`Accumulator`] to serialize it with delta encoding.
 #[derive(Default)]
 pub struct DeltaEncoding<T, Accum> {
-    inner: T,
-    _phantom: PhantomData<Accum>,
+    pub(crate) inner: T,
+    pub(crate) _phantom: PhantomData<Accum>,
 }
 
 impl<T, Accum> Deref for DeltaEncoding<T, Accum> {
@@ -104,11 +106,11 @@ mod serialization {
     #[cfg(feature = "debug")]
     use std::sync::atomic::AtomicUsize;
 
-    impl<T: ?Sized, Storage, Delta, Accum> Serialize for DeltaEncoding<Arena<T, Storage>, Accum>
+    impl<T: ?Sized, Storage, DeltaStorage, Accum> Serialize for DeltaEncoding<Arena<T, Storage>, Accum>
     where
         Storage: Borrow<T>,
-        Delta: Serialize,
-        Accum: Accumulator<Value = T, Storage = Storage, Delta = Delta>,
+        DeltaStorage: Serialize,
+        Accum: Accumulator<Value = T, Storage = Storage, DeltaStorage = DeltaStorage>,
     {
         fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
         where
@@ -119,13 +121,14 @@ mod serialization {
         }
     }
 
-    impl<'de, T: ?Sized, Storage, Delta, Accum> Deserialize<'de>
+    impl<'de, T: ?Sized, Storage, Delta, DeltaStorage, Accum> Deserialize<'de>
         for DeltaEncoding<Arena<T, Storage>, Accum>
     where
         T: Eq + Hash,
         Storage: Borrow<T>,
-        Delta: Deserialize<'de>,
-        Accum: Accumulator<Value = T, Storage = Storage, Delta = Delta>,
+        DeltaStorage: Borrow<Delta> + Deserialize<'de>,
+        Accum:
+            Accumulator<Value = T, Storage = Storage, Delta = Delta, DeltaStorage = DeltaStorage>,
     {
         fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
         where
@@ -149,12 +152,14 @@ mod serialization {
         }
     }
 
-    impl<'de, T: ?Sized, Storage, Delta, Accum> Visitor<'de> for DeltaArenaVisitor<T, Storage, Accum>
+    impl<'de, T: ?Sized, Storage, Delta, DeltaStorage, Accum> Visitor<'de>
+        for DeltaArenaVisitor<T, Storage, Accum>
     where
         T: Eq + Hash,
         Storage: Borrow<T>,
-        Delta: Deserialize<'de>,
-        Accum: Accumulator<Value = T, Storage = Storage, Delta = Delta>,
+        DeltaStorage: Borrow<Delta> + Deserialize<'de>,
+        Accum:
+            Accumulator<Value = T, Storage = Storage, Delta = Delta, DeltaStorage = DeltaStorage>,
     {
         type Value = DeltaEncoding<Arena<T, Storage>, Accum>;
 
@@ -179,8 +184,8 @@ mod serialization {
             };
 
             let mut acc = Accum::default();
-            while let Some(delta) = seq.next_element()? {
-                arena.push(acc.unfold(delta));
+            while let Some(delta) = seq.next_element::<DeltaStorage>()? {
+                arena.push(acc.unfold(delta.borrow()));
             }
 
             Ok(DeltaEncoding {

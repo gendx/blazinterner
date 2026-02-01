@@ -30,6 +30,7 @@
 
 #[cfg(feature = "delta")]
 mod delta;
+mod slice;
 
 use appendvec::AppendVec;
 use dashtable::DashTable;
@@ -42,6 +43,7 @@ use hashbrown::DefaultHashBuilder;
 use serde::de::{SeqAccess, Visitor};
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+pub use slice::{ArenaSlice, InternedSlice};
 use std::borrow::Borrow;
 use std::cmp::Ordering;
 use std::fmt::Debug;
@@ -331,7 +333,7 @@ where
 
 impl<T: ?Sized, Storage> PartialEq for Arena<T, Storage>
 where
-    T: Eq + Hash,
+    T: Eq,
     Storage: Borrow<T>,
 {
     fn eq(&self, other: &Self) -> bool {
@@ -344,7 +346,7 @@ where
 
 impl<T: ?Sized, Storage> Eq for Arena<T, Storage>
 where
-    T: Eq + Hash,
+    T: Eq,
     Storage: Borrow<T>,
 {
 }
