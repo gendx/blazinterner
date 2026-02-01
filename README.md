@@ -1,14 +1,14 @@
 # Blazinterner: efficient and concurrent interning of generic data
 
 [![Crate](https://img.shields.io/crates/v/blazinterner.svg?logo=rust)](https://crates.io/crates/blazinterner)
-[![Documentation](https://img.shields.io/docsrs/blazinterner/0.2.0?logo=rust)](https://docs.rs/blazinterner/0.2.0/)
-[![Minimum Rust 1.91.0](https://img.shields.io/crates/msrv/blazinterner/0.2.0.svg?logo=rust&color=orange)](https://releases.rs/docs/1.91.0/)
-[![Lines of Code](https://www.aschey.tech/tokei/github/gendx/blazinterner?category=code&branch=0.2.0)](https://github.com/gendx/blazinterner/tree/0.2.0)
-[![Dependencies](https://deps.rs/crate/blazinterner/0.2.0/status.svg)](https://deps.rs/crate/blazinterner/0.2.0)
-[![License](https://img.shields.io/crates/l/blazinterner/0.2.0.svg)](https://github.com/gendx/blazinterner/blob/0.2.0/LICENSE)
-[![Codecov](https://codecov.io/gh/gendx/blazinterner/branch/0.2.0/graph/badge.svg)](https://codecov.io/gh/gendx/blazinterner/tree/0.2.0)
-[![Build Status](https://github.com/gendx/blazinterner/actions/workflows/build.yml/badge.svg?branch=0.2.0)](https://github.com/gendx/blazinterner/actions/workflows/build.yml)
-[![Test Status](https://github.com/gendx/blazinterner/actions/workflows/tests.yml/badge.svg?branch=0.2.0)](https://github.com/gendx/blazinterner/actions/workflows/tests.yml)
+[![Documentation](https://img.shields.io/docsrs/blazinterner?logo=rust)](https://docs.rs/blazinterner)
+[![Minimum Rust 1.91.0](https://img.shields.io/badge/rust-1.91.0%2B-orange.svg?logo=rust)](https://releases.rs/docs/1.91.0/)
+[![Lines of Code](https://www.aschey.tech/tokei/github/gendx/blazinterner?category=code&branch=main)](https://github.com/gendx/blazinterner)
+[![Dependencies](https://deps.rs/repo/github/gendx/blazinterner/status.svg)](https://deps.rs/repo/github/gendx/blazinterner)
+[![License](https://img.shields.io/crates/l/blazinterner.svg)](https://github.com/gendx/blazinterner/blob/main/LICENSE)
+[![Codecov](https://codecov.io/gh/gendx/blazinterner/branch/main/graph/badge.svg)](https://codecov.io/gh/gendx/blazinterner/tree/main)
+[![Build Status](https://github.com/gendx/blazinterner/actions/workflows/build.yml/badge.svg?branch=main)](https://github.com/gendx/blazinterner/actions/workflows/build.yml)
+[![Test Status](https://github.com/gendx/blazinterner/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/gendx/blazinterner/actions/workflows/tests.yml)
 
 Here are the main features offered by this crate.
 

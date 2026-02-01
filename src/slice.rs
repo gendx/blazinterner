@@ -243,27 +243,34 @@ where
 impl<T> ArenaSlice<T> {
     /// Prints a summary of the storage used by this arena to stdout.
     pub fn print_summary(&self, prefix: &str, title: &str, total_bytes: usize) {
-        let len = self.len();
+        let num_items = self.num_items();
+        let num_slices = self.num_slices();
         let references = self.references();
         let estimated_bytes = self.get_size();
         println!(
-            "{}[{:.02}%] {} interner: {} objects | {} bytes ({:.02} bytes/object) | {} references ({:.02} refs/object)",
+            "{}[{:.02}%] {} interner: {} objects | {} items ({:.02} items/object) | {} bytes ({:.02} bytes/object) | {} references ({:.02} refs/object)",
             prefix,
             estimated_bytes as f64 * 100.0 / total_bytes as f64,
             title,
-            len,
+            num_slices,
+            num_items,
+            num_items as f64 / num_slices as f64,
             estimated_bytes,
-            estimated_bytes as f64 / len as f64,
+            estimated_bytes as f64 / num_slices as f64,
             references,
-            references as f64 / len as f64,
+            references as f64 / num_slices as f64,
         );
     }
 }
 
 #[cfg(feature = "debug")]
 impl<T> ArenaSlice<T> {
-    fn len(&self) -> usize {
+    fn num_items(&self) -> usize {
         self.vec.len()
+    }
+
+    fn num_slices(&self) -> usize {
+        self.ranges.len()
     }
 
     fn references(&self) -> usize {
