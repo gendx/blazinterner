@@ -8,11 +8,11 @@ use std::ops::{Deref, DerefMut};
 /// Helper trait for delta-encoding of interned values.
 pub trait Accumulator: Default {
     /// Interned value type.
-    type Value;
+    type Value: ?Sized;
     /// Storage type of interned values.
     type Storage: Borrow<Self::Value>;
     /// Delta produced by this accumulator.
-    type Delta;
+    type Delta: ?Sized;
     /// Storage type of the delta produced by this accumulator.
     type DeltaStorage: Borrow<Self::Delta>;
 
