@@ -117,7 +117,8 @@ impl<T> InternedSlice<T> {
     /// Obtains the underlying interning index.
     ///
     /// This is a low-level function. You should instead use the
-    /// [`lookup()`](lookup) API, unless you really know what you're doing.
+    /// [`lookup()`](Self::lookup) API, unless you really know what you're
+    /// doing.
     pub fn id(&self) -> u32 {
         self.id
     }
@@ -129,9 +130,8 @@ where
 {
     /// Interns the given value in the given [`ArenaSlice`].
     ///
-    /// If the value was already interned in this arena, it will simply be
-    /// borrowed to retrieve its interning index. Otherwise it will then be
-    /// converted to store it into the arena.
+    /// If the value was already interned in this arena, its interning index
+    /// will simply be returned. Otherwise it will be stored into the arena.
     pub fn from(arena: &ArenaSlice<T>, value: &[T]) -> Self {
         let id = arena.intern(value);
         Self {

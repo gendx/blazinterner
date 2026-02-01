@@ -131,8 +131,8 @@ impl<T: ?Sized, Storage> Interned<T, Storage> {
     /// Obtains the underlying interning index.
     ///
     /// This is a low-level function. You should instead use the
-    /// [`lookup()`](lookup) and [`lookup_ref()`](lookup_ref) APIs, unless you
-    /// really know what you're doing.
+    /// [`lookup()`](Self::lookup) and [`lookup_ref()`](Self::lookup_ref) APIs,
+    /// unless you really know what you're doing.
     pub fn id(&self) -> u32 {
         self.id
     }
@@ -167,7 +167,8 @@ where
     /// intern this value, otherwise an arbitrary value will be returned or
     /// a panic will happen.
     ///
-    /// See also [`lookup_ref()`](lookup_ref) if you only need a reference.
+    /// See also [`lookup_ref()`](Self::lookup_ref) if you only need a
+    /// reference.
     pub fn lookup(&self, arena: &Arena<T, Storage>) -> Storage {
         arena.lookup(self.id)
     }
@@ -183,7 +184,7 @@ where
     /// intern this value, otherwise an arbitrary value will be returned or
     /// a panic will happen.
     ///
-    /// See also [`lookup()`](lookup) if you need an owned value.
+    /// See also [`lookup()`](Self::lookup) if you need an owned value.
     pub fn lookup_ref<'a>(&self, arena: &'a Arena<T, Storage>) -> &'a T {
         arena.lookup_ref(self.id)
     }
