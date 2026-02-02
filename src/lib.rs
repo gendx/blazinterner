@@ -422,7 +422,7 @@ where
 {
     /// Prints a summary of the storage used by this arena to stdout.
     pub fn print_summary(&self, prefix: &str, title: &str, total_bytes: usize) {
-        let len = self.len();
+        let len = self.vec.len();
         let references = self.references();
         let estimated_bytes = self.get_size();
         println!(

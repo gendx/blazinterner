@@ -203,27 +203,27 @@ impl<T> ArenaSlice<T> {
 
     /// Returns the number of slices in this arena.
     ///
-    /// Note that because [`ArenaSlice`] is a concurrent data structure, this is only
-    /// a snapshot as viewed by this thread, and the result may change if
-    /// other threads are inserting values.
+    /// Note that because [`ArenaSlice`] is a concurrent data structure, this is
+    /// only a snapshot as viewed by this thread, and the result may change
+    /// if other threads are inserting values.
     pub fn slices(&self) -> usize {
         self.ranges.len()
     }
 
     /// Returns the total number of items of type `T` in this arena.
     ///
-    /// Note that because [`ArenaSlice`] is a concurrent data structure, this is only
-    /// a snapshot as viewed by this thread, and the result may change if
-    /// other threads are inserting values.
+    /// Note that because [`ArenaSlice`] is a concurrent data structure, this is
+    /// only a snapshot as viewed by this thread, and the result may change
+    /// if other threads are inserting values.
     pub fn items(&self) -> usize {
         self.vec.len()
     }
 
     /// Checks if this arena is empty.
     ///
-    /// Note that because [`ArenaSlice`] is a concurrent data structure, this is only
-    /// a snapshot as viewed by this thread, and the result may change if
-    /// other threads are inserting values.
+    /// Note that because [`ArenaSlice`] is a concurrent data structure, this is
+    /// only a snapshot as viewed by this thread, and the result may change
+    /// if other threads are inserting values.
     pub fn is_empty(&self) -> bool {
         self.slices() == 0
     }
@@ -301,8 +301,8 @@ where
 {
     /// Prints a summary of the storage used by this arena to stdout.
     pub fn print_summary(&self, prefix: &str, title: &str, total_bytes: usize) {
-        let slices = self.slices();
-        let items = self.items();
+        let slices = self.ranges.len();
+        let items = self.vec.len();
         let references = self.references();
         let estimated_bytes = self.get_size();
         println!(

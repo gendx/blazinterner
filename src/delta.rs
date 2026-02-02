@@ -25,12 +25,28 @@ pub trait Accumulator: Default {
     fn unfold(&mut self, d: &Self::Delta) -> Self::Storage;
 }
 
-/// Wrapper around an [`Arena`](crate::Arena) that uses the given
-/// [`Accumulator`] to serialize it with delta encoding.
+/// Wrapper around an [`Arena`](crate::Arena) or
+/// [`ArenaSlice`](crate::ArenaSlice) that uses the given [`Accumulator`] to
+/// serialize it with delta encoding.
 #[derive(Default)]
 pub struct DeltaEncoding<T, Accum> {
     pub(crate) inner: T,
     pub(crate) _phantom: PhantomData<Accum>,
+}
+
+impl<T, Accum> DeltaEncoding<T, Accum> {
+    /// Creates a new wrapper around the given arena.
+    pub fn new(inner: T) -> Self {
+        Self {
+            inner,
+            _phantom: PhantomData,
+        }
+    }
+
+    /// Extracts the inner arena from this wrapper.
+    pub fn into_inner(self) -> T {
+        self.inner
+    }
 }
 
 impl<T, Accum> Deref for DeltaEncoding<T, Accum> {
