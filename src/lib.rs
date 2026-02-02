@@ -307,6 +307,62 @@ pub struct Arena<T: ?Sized, Storage = T> {
     _phantom: PhantomData<fn() -> *const T>,
 }
 
+#[cfg(feature = "raw")]
+impl<T: ?Sized, Storage> Arena<T, Storage> {
+    /// Creates a new arena with pre-allocated space to store at least `len`
+    /// values of type `T`.
+    pub fn with_capacity(len: usize) -> Self {
+        Self {
+            vec: AppendVec::with_capacity(len),
+            map: DashTable::with_capacity(len),
+            hasher: DefaultHashBuilder::default(),
+            #[cfg(feature = "debug")]
+            references: AtomicUsize::new(0),
+            _phantom: PhantomData,
+        }
+    }
+
+    /// Returns the number of values in this arena.
+    ///
+    /// Note that because [`Arena`] is a concurrent data structure, this is only
+    /// a snapshot as viewed by this thread, and the result may change if
+    /// other threads are inserting values.
+    pub fn len(&self) -> usize {
+        self.vec.len()
+    }
+
+    /// Checks if this arena is empty.
+    ///
+    /// Note that because [`Arena`] is a concurrent data structure, this is only
+    /// a snapshot as viewed by this thread, and the result may change if
+    /// other threads are inserting values.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+#[cfg(feature = "raw")]
+impl<T: ?Sized, Storage> Arena<T, Storage>
+where
+    T: Eq + Hash,
+    Storage: Borrow<T>,
+{
+    /// Unconditionally push a value, without validating that it's already
+    /// interned.
+    pub fn push_mut(&mut self, value: Storage) -> u32 {
+        self.push(value)
+    }
+}
+
+impl<T: ?Sized, Storage> Arena<T, Storage>
+where
+    Storage: Borrow<T>,
+{
+    fn iter(&self) -> impl Iterator<Item = &T> {
+        self.vec.iter().map(|x| x.borrow())
+    }
+}
+
 impl<T: ?Sized, Storage> Default for Arena<T, Storage> {
     fn default() -> Self {
         Self {
@@ -326,9 +382,7 @@ where
     Storage: Borrow<T>,
 {
     fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        fmt.debug_list()
-            .entries(self.vec.iter().map(|x| x.borrow()))
-            .finish()
+        fmt.debug_list().entries(self.iter()).finish()
     }
 }
 
@@ -338,10 +392,7 @@ where
     Storage: Borrow<T>,
 {
     fn eq(&self, other: &Self) -> bool {
-        self.vec
-            .iter()
-            .map(|x| x.borrow())
-            .eq(other.vec.iter().map(|x| x.borrow()))
+        self.iter().eq(other.iter())
     }
 }
 
@@ -390,10 +441,6 @@ where
 
 #[cfg(feature = "debug")]
 impl<T: ?Sized, Storage> Arena<T, Storage> {
-    fn len(&self) -> usize {
-        self.vec.len()
-    }
-
     fn references(&self) -> usize {
         self.references.load(atomic::Ordering::Relaxed)
     }
@@ -427,7 +474,7 @@ where
 
     /// Unconditionally push a value, without validating that it's already
     /// interned.
-    #[cfg(feature = "serde")]
+    #[cfg(any(feature = "serde", feature = "raw"))]
     fn push(&mut self, value: Storage) -> u32 {
         #[cfg(feature = "debug")]
         self.references.fetch_add(1, atomic::Ordering::Relaxed);
@@ -474,7 +521,7 @@ where
     where
         S: Serializer,
     {
-        serializer.collect_seq(self.vec.iter().map(|x| x.borrow()))
+        serializer.collect_seq(self.iter())
     }
 }
 

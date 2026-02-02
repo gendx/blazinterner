@@ -186,6 +186,61 @@ pub struct ArenaSlice<T> {
     references: AtomicUsize,
 }
 
+#[cfg(feature = "raw")]
+impl<T> ArenaSlice<T> {
+    /// Creates a new arena with pre-allocated space to store at least the given
+    /// number of slices, totalling the given number of items of type `T`.
+    pub fn with_capacity(slices: usize, items: usize) -> Self {
+        Self {
+            vec: AppendVec::with_capacity(items),
+            ranges: AppendVec::with_capacity(slices),
+            map: DashTable::with_capacity(slices),
+            hasher: DefaultHashBuilder::default(),
+            #[cfg(feature = "debug")]
+            references: AtomicUsize::new(0),
+        }
+    }
+
+    /// Returns the number of slices in this arena.
+    ///
+    /// Note that because [`ArenaSlice`] is a concurrent data structure, this is only
+    /// a snapshot as viewed by this thread, and the result may change if
+    /// other threads are inserting values.
+    pub fn slices(&self) -> usize {
+        self.ranges.len()
+    }
+
+    /// Returns the total number of items of type `T` in this arena.
+    ///
+    /// Note that because [`ArenaSlice`] is a concurrent data structure, this is only
+    /// a snapshot as viewed by this thread, and the result may change if
+    /// other threads are inserting values.
+    pub fn items(&self) -> usize {
+        self.vec.len()
+    }
+
+    /// Checks if this arena is empty.
+    ///
+    /// Note that because [`ArenaSlice`] is a concurrent data structure, this is only
+    /// a snapshot as viewed by this thread, and the result may change if
+    /// other threads are inserting values.
+    pub fn is_empty(&self) -> bool {
+        self.slices() == 0
+    }
+}
+
+#[cfg(feature = "raw")]
+impl<T> ArenaSlice<T>
+where
+    T: Default + Copy + Eq + Hash,
+{
+    /// Unconditionally push a value, without validating that it's already
+    /// interned.
+    pub fn push_mut(&mut self, value: &[T]) -> u32 {
+        self.push(value)
+    }
+}
+
 impl<T> ArenaSlice<T> {
     fn iter(&self) -> impl Iterator<Item = &[T]> {
         self.ranges
@@ -246,8 +301,8 @@ where
 {
     /// Prints a summary of the storage used by this arena to stdout.
     pub fn print_summary(&self, prefix: &str, title: &str, total_bytes: usize) {
-        let num_items = self.num_items();
-        let num_slices = self.num_slices();
+        let slices = self.slices();
+        let items = self.items();
         let references = self.references();
         let estimated_bytes = self.get_size();
         println!(
@@ -255,27 +310,19 @@ where
             prefix,
             estimated_bytes as f64 * 100.0 / total_bytes as f64,
             title,
-            num_slices,
-            num_items,
-            num_items as f64 / num_slices as f64,
+            slices,
+            items,
+            items as f64 / slices as f64,
             estimated_bytes,
-            estimated_bytes as f64 / num_slices as f64,
+            estimated_bytes as f64 / slices as f64,
             references,
-            references as f64 / num_slices as f64,
+            references as f64 / slices as f64,
         );
     }
 }
 
 #[cfg(feature = "debug")]
 impl<T> ArenaSlice<T> {
-    fn num_items(&self) -> usize {
-        self.vec.len()
-    }
-
-    fn num_slices(&self) -> usize {
-        self.ranges.len()
-    }
-
     fn references(&self) -> usize {
         self.references.load(atomic::Ordering::Relaxed)
     }
@@ -312,7 +359,7 @@ where
 
     /// Unconditionally push a value, without validating that it's already
     /// interned.
-    #[cfg(feature = "serde")]
+    #[cfg(any(feature = "serde", feature = "raw"))]
     fn push(&mut self, value: &[T]) -> u32 {
         #[cfg(feature = "debug")]
         self.references.fetch_add(1, atomic::Ordering::Relaxed);
