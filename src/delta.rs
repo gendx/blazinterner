@@ -81,7 +81,7 @@ where
     }
 
     fn get_heap_size_with_tracker<Tr: GetSizeTracker>(&self, tracker: Tr) -> (usize, Tr) {
-        self.inner.get_size_with_tracker(tracker)
+        self.inner.get_heap_size_with_tracker(tracker)
     }
 
     fn get_size(&self) -> usize {
