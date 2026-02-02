@@ -240,7 +240,10 @@ where
 }
 
 #[cfg(feature = "debug")]
-impl<T> ArenaSlice<T> {
+impl<T> ArenaSlice<T>
+where
+    T: GetSize,
+{
     /// Prints a summary of the storage used by this arena to stdout.
     pub fn print_summary(&self, prefix: &str, title: &str, total_bytes: usize) {
         let num_items = self.num_items();
