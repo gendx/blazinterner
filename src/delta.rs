@@ -47,6 +47,14 @@ impl<T, Accum> DeltaEncoding<T, Accum> {
     pub fn into_inner(self) -> T {
         self.inner
     }
+
+    /// Converts from `&DeltaEncoding<T, Accum>` to `DeltaEncoding<&T, Accum>`
+    pub fn as_ref(&self) -> DeltaEncoding<&T, Accum> {
+        DeltaEncoding {
+            inner: &self.inner,
+            _phantom: PhantomData,
+        }
+    }
 }
 
 impl<T, Accum> Deref for DeltaEncoding<T, Accum> {
@@ -122,7 +130,7 @@ mod serialization {
     #[cfg(feature = "debug")]
     use std::sync::atomic::AtomicUsize;
 
-    impl<T: ?Sized, Storage, DeltaStorage, Accum> Serialize for DeltaEncoding<Arena<T, Storage>, Accum>
+    impl<T: ?Sized, Storage, DeltaStorage, Accum> Serialize for DeltaEncoding<&Arena<T, Storage>, Accum>
     where
         Storage: Borrow<T>,
         DeltaStorage: Serialize,

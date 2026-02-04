@@ -550,7 +550,7 @@ mod delta {
     use super::*;
     use crate::{Accumulator, DeltaEncoding};
 
-    impl<T, Delta, Accum> Serialize for DeltaEncoding<ArenaSlice<T>, Accum>
+    impl<T, Delta, Accum> Serialize for DeltaEncoding<&ArenaSlice<T>, Accum>
     where
         Delta: Serialize,
         Accum: Accumulator<Value = [T], Storage = Box<[T]>, DeltaStorage = Box<[Delta]>>,
@@ -581,7 +581,7 @@ mod delta {
     struct ArenaSliceWrapper<'a, T, Accum> {
         ranges_len: u32,
         total_len: u32,
-        arena: &'a DeltaEncoding<ArenaSlice<T>, Accum>,
+        arena: &'a DeltaEncoding<&'a ArenaSlice<T>, Accum>,
     }
 
     impl<'a, T, Delta, Accum> Serialize for ArenaSliceWrapper<'a, T, Accum>
