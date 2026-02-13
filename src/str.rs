@@ -533,3 +533,127 @@ mod delta {
         }
     }
 }
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    #[cfg(all(feature = "delta", feature = "serde"))]
+    use crate::{Accumulator, DeltaEncoding};
+
+    #[test]
+    fn test_lookup() {
+        let arena = ArenaStr::default();
+
+        let empty = InternedStr::from(&arena, "");
+        let a = InternedStr::from(&arena, "a");
+        let b = InternedStr::from(&arena, "bb");
+        let c = InternedStr::from(&arena, "ccc");
+        let d = InternedStr::from(&arena, "dddd");
+        let e = InternedStr::from(&arena, "eeeee");
+
+        assert_eq!(empty.lookup(&arena), "");
+        assert_eq!(a.lookup(&arena), "a");
+        assert_eq!(b.lookup(&arena), "bb");
+        assert_eq!(c.lookup(&arena), "ccc");
+        assert_eq!(d.lookup(&arena), "dddd");
+        assert_eq!(e.lookup(&arena), "eeeee");
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn test_serde() {
+        let arena = ArenaStr::default();
+
+        let empty = InternedStr::from(&arena, "");
+        let a = InternedStr::from(&arena, "a");
+        let b = InternedStr::from(&arena, "bb");
+        let c = InternedStr::from(&arena, "ccc");
+        let d = InternedStr::from(&arena, "dddd");
+        let e = InternedStr::from(&arena, "eeeee");
+
+        let serialized = postcard::to_stdvec(&arena).expect("Failed to serialize arena");
+        assert_eq!(
+            serialized,
+            vec![
+                6, 0, 1, 2, 3, 4, 5, 15, b'a', b'b', b'b', b'c', b'c', b'c', b'd', b'd', b'd',
+                b'd', b'e', b'e', b'e', b'e', b'e'
+            ]
+        );
+
+        let arena = postcard::from_bytes(&serialized).expect("Failed to deserialize arena");
+
+        assert_eq!(empty.lookup(&arena), "");
+        assert_eq!(a.lookup(&arena), "a");
+        assert_eq!(b.lookup(&arena), "bb");
+        assert_eq!(c.lookup(&arena), "ccc");
+        assert_eq!(d.lookup(&arena), "dddd");
+        assert_eq!(e.lookup(&arena), "eeeee");
+    }
+
+    #[cfg(all(feature = "delta", feature = "serde"))]
+    #[derive(Default)]
+    struct StringAccumulator {
+        previous: Vec<u8>,
+    }
+
+    #[cfg(all(feature = "delta", feature = "serde"))]
+    impl Accumulator for StringAccumulator {
+        type Value = str;
+        type Storage = Box<str>;
+        type Delta = [u8];
+        type DeltaStorage = Box<[u8]>;
+
+        fn fold(&mut self, v: &Self::Value) -> Self::DeltaStorage {
+            let mut delta = Vec::with_capacity(v.len());
+            for (i, byte) in v.bytes().enumerate() {
+                delta.push(byte ^ self.previous.get(i).copied().unwrap_or(0));
+            }
+            self.previous = v.into();
+            delta.into()
+        }
+
+        fn unfold(&mut self, d: &Self::Delta) -> Self::Storage {
+            let mut value = Vec::with_capacity(d.len());
+            for (i, byte) in d.iter().enumerate() {
+                value.push(byte ^ self.previous.get(i).copied().unwrap_or(0));
+            }
+            self.previous = value.clone();
+            String::from_utf8(value)
+                .expect("Invalid UTF-8 encoding")
+                .into()
+        }
+    }
+
+    #[cfg(all(feature = "delta", feature = "serde"))]
+    #[test]
+    fn test_serde_delta() {
+        let arena = ArenaStr::default();
+
+        let empty = InternedStr::from(&arena, "");
+        let a = InternedStr::from(&arena, "a");
+        let b = InternedStr::from(&arena, "bb");
+        let c = InternedStr::from(&arena, "ccc");
+        let d = InternedStr::from(&arena, "dddd");
+        let e = InternedStr::from(&arena, "eeeee");
+
+        let delta_encoded: DeltaEncoding<&ArenaStr, StringAccumulator> = DeltaEncoding::new(&arena);
+        let serialized = postcard::to_stdvec(&delta_encoded).expect("Failed to serialize arena");
+        assert_eq!(
+            serialized,
+            vec![
+                6, 0, 1, 2, 3, 4, 5, 15, 97, 3, 98, 1, 1, 99, 7, 7, 7, 100, 1, 1, 1, 1, 101
+            ]
+        );
+
+        let delta_encoded: DeltaEncoding<ArenaStr, StringAccumulator> =
+            postcard::from_bytes(&serialized).expect("Failed to deserialize arena");
+        let arena = delta_encoded.into_inner();
+
+        assert_eq!(empty.lookup(&arena), "");
+        assert_eq!(a.lookup(&arena), "a");
+        assert_eq!(b.lookup(&arena), "bb");
+        assert_eq!(c.lookup(&arena), "ccc");
+        assert_eq!(d.lookup(&arena), "dddd");
+        assert_eq!(e.lookup(&arena), "eeeee");
+    }
+}
