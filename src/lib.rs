@@ -31,6 +31,7 @@
 #[cfg(feature = "delta")]
 mod delta;
 mod slice;
+mod str;
 
 use appendvec::AppendVec;
 use dashtable::DashTable;
@@ -43,6 +44,7 @@ use hashbrown::DefaultHashBuilder;
 use serde::de::{SeqAccess, Visitor};
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use slice::CopyRangeU32;
 pub use slice::{ArenaSlice, InternedSlice};
 use std::borrow::Borrow;
 use std::cmp::Ordering;
@@ -53,6 +55,7 @@ use std::marker::PhantomData;
 use std::mem::size_of;
 #[cfg(feature = "debug")]
 use std::sync::atomic::{self, AtomicUsize};
+pub use str::{ArenaStr, InternedStr};
 
 /// A handle to an interned value in an [`Arena`].
 ///

@@ -1,6 +1,5 @@
-#[cfg(feature = "serde")]
-use super::U32Visitor;
-use appendvec::AppendVec;
+use crate::CopyRangeU32;
+use appendvec::{AppendStr, AppendVec};
 use dashtable::DashTable;
 #[cfg(feature = "get-size2")]
 use get_size2::{GetSize, GetSizeTracker};
@@ -8,110 +7,41 @@ use hashbrown::DefaultHashBuilder;
 #[cfg(feature = "serde")]
 use serde::de::{Error, SeqAccess, Visitor};
 #[cfg(feature = "serde")]
-use serde::ser::{SerializeSeq, SerializeTuple};
+use serde::ser::SerializeTuple;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 #[cfg(feature = "serde")]
 use serde_tuple::{Deserialize_tuple, Serialize_tuple};
 #[cfg(feature = "serde")]
 use std::cell::Cell;
-use std::cmp::Ordering;
 use std::fmt::Debug;
-use std::hash::{BuildHasher, Hash, Hasher};
-use std::marker::PhantomData;
-use std::ops::Range;
+use std::hash::{BuildHasher, Hash};
 #[cfg(feature = "debug")]
 use std::sync::atomic::{self, AtomicUsize};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// A handle to an interned value in an [`ArenaStr`].
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[cfg_attr(feature = "get-size2", derive(GetSize))]
 #[cfg_attr(feature = "serde", derive(Serialize_tuple, Deserialize_tuple))]
-pub struct CopyRangeU32 {
-    pub start: u32,
-    pub end: u32,
-}
-
-impl From<Range<u32>> for CopyRangeU32 {
-    fn from(other: Range<u32>) -> Self {
-        CopyRangeU32 {
-            start: other.start,
-            end: other.end,
-        }
-    }
-}
-
-impl From<CopyRangeU32> for Range<u32> {
-    fn from(other: CopyRangeU32) -> Self {
-        other.start..other.end
-    }
-}
-
-/// A handle to an interned value in an [`ArenaSlice`].
-pub struct InternedSlice<T> {
+pub struct InternedStr {
     id: u32,
-    _phantom: PhantomData<fn() -> *const T>,
 }
 
-impl<T> Debug for InternedSlice<T> {
+impl Debug for InternedStr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_tuple("I").field(&self.id).finish()
     }
 }
 
-impl<T> Clone for InternedSlice<T> {
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-
-impl<T> Copy for InternedSlice<T> {}
-
-impl<T> PartialEq for InternedSlice<T> {
-    fn eq(&self, other: &Self) -> bool {
-        self.id.eq(&other.id)
-    }
-}
-
-impl<T> Eq for InternedSlice<T> {}
-
-impl<T> PartialOrd for InternedSlice<T> {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl<T> Ord for InternedSlice<T> {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.id.cmp(&other.id)
-    }
-}
-
-impl<T> Hash for InternedSlice<T> {
-    fn hash<H>(&self, state: &mut H)
-    where
-        H: Hasher,
-    {
-        self.id.hash(state);
-    }
-}
-
-#[cfg(feature = "get-size2")]
-impl<T> GetSize for InternedSlice<T> {
-    // There is nothing on the heap, so the default implementation works out of the
-    // box.
-}
-
 #[cfg(feature = "raw")]
-impl<T> InternedSlice<T> {
+impl InternedStr {
     /// Creates an interned value for the given index.
     ///
     /// This is a low-level function. You should instead use the
     /// [`from()`](Self::from) API to intern a value, unless you really know
     /// what you're doing.
     pub fn from_id(id: u32) -> Self {
-        Self {
-            id,
-            _phantom: PhantomData,
-        }
+        Self { id }
     }
 
     /// Obtains the underlying interning index.
@@ -124,61 +54,29 @@ impl<T> InternedSlice<T> {
     }
 }
 
-impl<T> InternedSlice<T>
-where
-    T: Default + Copy + Eq + Hash,
-{
-    /// Interns the given value in the given [`ArenaSlice`].
+impl InternedStr {
+    /// Interns the given value in the given [`ArenaStr`].
     ///
     /// If the value was already interned in this arena, its interning index
     /// will simply be returned. Otherwise it will be stored into the arena.
-    pub fn from(arena: &ArenaSlice<T>, value: &[T]) -> Self {
+    pub fn from(arena: &ArenaStr, value: &str) -> Self {
         let id = arena.intern(value);
-        Self {
-            id,
-            _phantom: PhantomData,
-        }
+        Self { id }
     }
-}
 
-impl<T> InternedSlice<T> {
-    /// Retrieves this interned value from the given [`ArenaSlice`].
+    /// Retrieves this interned value from the given [`ArenaStr`].
     ///
     /// The caller is responsible for ensuring that the same arena was used to
     /// intern this value, otherwise an arbitrary value will be returned or
     /// a panic will happen.
-    pub fn lookup<'a>(&self, arena: &'a ArenaSlice<T>) -> &'a [T] {
-        arena.lookup_slice(self.id)
+    pub fn lookup<'a>(&self, arena: &'a ArenaStr) -> &'a str {
+        arena.lookup_str(self.id)
     }
 }
 
-#[cfg(feature = "serde")]
-impl<T> Serialize for InternedSlice<T> {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        serializer.serialize_u32(self.id)
-    }
-}
-
-#[cfg(feature = "serde")]
-impl<'de, T> Deserialize<'de> for InternedSlice<T> {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let id = deserializer.deserialize_u32(U32Visitor)?;
-        Ok(Self {
-            id,
-            _phantom: PhantomData,
-        })
-    }
-}
-
-/// Interning arena for slices of type `T`.
-pub struct ArenaSlice<T> {
-    vec: AppendVec<T>,
+/// Interning arena for strings.
+pub struct ArenaStr {
+    vec: AppendStr,
     ranges: AppendVec<CopyRangeU32>,
     map: DashTable<u32>,
     hasher: DefaultHashBuilder,
@@ -187,72 +85,66 @@ pub struct ArenaSlice<T> {
 }
 
 #[cfg(feature = "raw")]
-impl<T> ArenaSlice<T> {
+impl ArenaStr {
     /// Creates a new arena with pre-allocated space to store at least the given
-    /// number of slices, totalling the given number of items of type `T`.
-    pub fn with_capacity(slices: usize, items: usize) -> Self {
+    /// number of strings, totalling the given number of bytes.
+    pub fn with_capacity(strings: usize, bytes: usize) -> Self {
         Self {
-            vec: AppendVec::with_capacity(items),
-            ranges: AppendVec::with_capacity(slices),
-            map: DashTable::with_capacity(slices),
+            vec: AppendStr::with_capacity(bytes),
+            ranges: AppendVec::with_capacity(strings),
+            map: DashTable::with_capacity(strings),
             hasher: DefaultHashBuilder::default(),
             #[cfg(feature = "debug")]
             references: AtomicUsize::new(0),
         }
     }
 
-    /// Returns the number of slices in this arena.
+    /// Returns the number of strings in this arena.
     ///
-    /// Note that because [`ArenaSlice`] is a concurrent data structure, this is
+    /// Note that because [`ArenaStr`] is a concurrent data structure, this is
     /// only a snapshot as viewed by this thread, and the result may change
     /// if other threads are inserting values.
-    pub fn slices(&self) -> usize {
+    pub fn strings(&self) -> usize {
         self.ranges.len()
     }
 
-    /// Returns the total number of items of type `T` in this arena.
+    /// Returns the total number of bytes in this arena.
     ///
-    /// Note that because [`ArenaSlice`] is a concurrent data structure, this is
+    /// Note that because [`ArenaStr`] is a concurrent data structure, this is
     /// only a snapshot as viewed by this thread, and the result may change
     /// if other threads are inserting values.
-    pub fn items(&self) -> usize {
+    pub fn bytes(&self) -> usize {
         self.vec.len()
     }
 
     /// Checks if this arena is empty.
     ///
-    /// Note that because [`ArenaSlice`] is a concurrent data structure, this is
+    /// Note that because [`ArenaStr`] is a concurrent data structure, this is
     /// only a snapshot as viewed by this thread, and the result may change
     /// if other threads are inserting values.
     pub fn is_empty(&self) -> bool {
-        self.slices() == 0
+        self.strings() == 0
     }
-}
 
-#[cfg(feature = "raw")]
-impl<T> ArenaSlice<T>
-where
-    T: Default + Copy + Eq + Hash,
-{
     /// Unconditionally push a value, without validating that it's already
     /// interned.
-    pub fn push_mut(&mut self, value: &[T]) -> u32 {
+    pub fn push_mut(&mut self, value: &str) -> u32 {
         self.push(value)
     }
 }
 
-impl<T> ArenaSlice<T> {
-    fn iter(&self) -> impl Iterator<Item = &[T]> {
+impl ArenaStr {
+    fn iter(&self) -> impl Iterator<Item = &str> {
         self.ranges
             .iter()
             .map(|&range| &self.vec[range.start as usize..range.end as usize])
     }
 }
 
-impl<T> Default for ArenaSlice<T> {
+impl Default for ArenaStr {
     fn default() -> Self {
         Self {
-            vec: AppendVec::new(),
+            vec: AppendStr::new(),
             ranges: AppendVec::new(),
             map: DashTable::new(),
             hasher: DefaultHashBuilder::default(),
@@ -262,77 +154,56 @@ impl<T> Default for ArenaSlice<T> {
     }
 }
 
-impl<T> Debug for ArenaSlice<T>
-where
-    T: Debug,
-{
+impl Debug for ArenaStr {
     fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         fmt.debug_list().entries(self.iter()).finish()
     }
 }
 
-impl<T> PartialEq for ArenaSlice<T>
-where
-    T: Eq + Hash,
-{
+impl PartialEq for ArenaStr {
     fn eq(&self, other: &Self) -> bool {
         self.iter().eq(other.iter())
     }
 }
 
-impl<T> Eq for ArenaSlice<T> where T: Eq + Hash {}
+impl Eq for ArenaStr {}
 
 #[cfg(feature = "get-size2")]
-impl<T> GetSize for ArenaSlice<T>
-where
-    T: GetSize,
-{
+impl GetSize for ArenaStr {
     fn get_heap_size_with_tracker<Tr: GetSizeTracker>(&self, tracker: Tr) -> (usize, Tr) {
-        let heap_size = self.vec.iter().map(|x| x.get_size()).sum::<usize>()
+        let heap_size = self.vec.len() * size_of::<u8>()
             + self.ranges.len() * (size_of::<CopyRangeU32>() + size_of::<u32>());
         (heap_size, tracker)
     }
 }
 
 #[cfg(feature = "debug")]
-impl<T> ArenaSlice<T>
-where
-    T: GetSize,
-{
+impl ArenaStr {
     /// Prints a summary of the storage used by this arena to stdout.
     pub fn print_summary(&self, prefix: &str, title: &str, total_bytes: usize) {
-        let slices = self.ranges.len();
-        let items = self.vec.len();
+        let strings = self.ranges.len();
         let references = self.references();
         let estimated_bytes = self.get_size();
         println!(
-            "{}[{:.02}%] {} interner: {} objects | {} items ({:.02} items/object) | {} bytes ({:.02} bytes/object) | {} references ({:.02} refs/object)",
+            "{}[{:.02}%] {} interner: {} objects | {} bytes ({:.02} bytes/object) | {} references ({:.02} refs/object)",
             prefix,
             estimated_bytes as f64 * 100.0 / total_bytes as f64,
             title,
-            slices,
-            items,
-            items as f64 / slices as f64,
+            strings,
             estimated_bytes,
-            estimated_bytes as f64 / slices as f64,
+            estimated_bytes as f64 / strings as f64,
             references,
-            references as f64 / slices as f64,
+            references as f64 / strings as f64,
         );
     }
-}
 
-#[cfg(feature = "debug")]
-impl<T> ArenaSlice<T> {
     fn references(&self) -> usize {
         self.references.load(atomic::Ordering::Relaxed)
     }
 }
 
-impl<T> ArenaSlice<T>
-where
-    T: Default + Copy + Eq + Hash,
-{
-    fn intern(&self, value: &[T]) -> u32 {
+impl ArenaStr {
+    fn intern(&self, value: &str) -> u32 {
         #[cfg(feature = "debug")]
         self.references.fetch_add(1, atomic::Ordering::Relaxed);
 
@@ -341,11 +212,11 @@ where
             .map
             .entry(
                 hash,
-                |&i| self.lookup_slice(i) == value,
-                |&i| self.hasher.hash_one(self.lookup_slice(i)),
+                |&i| self.lookup_str(i) == value,
+                |&i| self.hasher.hash_one(self.lookup_str(i)),
             )
             .or_insert_with(|| {
-                let range = self.vec.push_slice(value);
+                let range = self.vec.push_str(value);
                 assert!(range.start <= u32::MAX as usize);
                 assert!(range.end <= u32::MAX as usize);
                 let range = range.start as u32..range.end as u32;
@@ -360,13 +231,13 @@ where
     /// Unconditionally push a value, without validating that it's already
     /// interned.
     #[cfg(any(feature = "serde", feature = "raw"))]
-    fn push(&mut self, value: &[T]) -> u32 {
+    fn push(&mut self, value: &str) -> u32 {
         #[cfg(feature = "debug")]
         self.references.fetch_add(1, atomic::Ordering::Relaxed);
 
         let hash = self.hasher.hash_one(value);
 
-        let range = self.vec.push_slice_mut(value);
+        let range = self.vec.push_str_mut(value);
         assert!(range.start <= u32::MAX as usize);
         assert!(range.end <= u32::MAX as usize);
         let range = range.start as u32..range.end as u32;
@@ -376,14 +247,12 @@ where
         let id = id as u32;
 
         self.map
-            .insert_unique(hash, id, |&i| self.hasher.hash_one(self.lookup_slice(i)));
+            .insert_unique(hash, id, |&i| self.hasher.hash_one(self.lookup_str(i)));
 
         id
     }
-}
 
-impl<T> ArenaSlice<T> {
-    fn lookup_slice(&self, id: u32) -> &[T] {
+    fn lookup_str(&self, id: u32) -> &str {
         let range = self.ranges[id as usize];
         let range = range.start as usize..range.end as usize;
         &self.vec[range]
@@ -391,10 +260,7 @@ impl<T> ArenaSlice<T> {
 }
 
 #[cfg(feature = "serde")]
-impl<T> Serialize for ArenaSlice<T>
-where
-    T: Serialize,
-{
+impl Serialize for ArenaStr {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -408,7 +274,7 @@ where
         };
         tuple.serialize_element(&ranges)?;
 
-        tuple.serialize_element(&ArenaSliceWrapper {
+        tuple.serialize_element(&ArenaStrWrapper {
             ranges_len: ranges.ranges_len.into_inner(),
             total_len: ranges.total_len.into_inner(),
             arena: self,
@@ -448,67 +314,45 @@ impl<'a> Serialize for RangeWrapper<'a> {
 }
 
 #[cfg(feature = "serde")]
-struct ArenaSliceWrapper<'a, T> {
+struct ArenaStrWrapper<'a> {
     ranges_len: u32,
     total_len: u32,
-    arena: &'a ArenaSlice<T>,
+    arena: &'a ArenaStr,
 }
 
 #[cfg(feature = "serde")]
-impl<'a, T> Serialize for ArenaSliceWrapper<'a, T>
-where
-    T: Serialize,
-{
+impl<'a> Serialize for ArenaStrWrapper<'a> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
-        let mut seq = serializer.serialize_seq(Some(self.total_len as usize))?;
-
+        // TODO: Make this zero-copy?
+        let mut string = String::with_capacity(self.total_len as usize);
         for range in self.arena.ranges.iter().take(self.ranges_len as usize) {
-            let slice = &self.arena.vec[range.start as usize..range.end as usize];
-            for t in slice {
-                seq.serialize_element(t)?;
-            }
+            let s = &self.arena.vec[range.start as usize..range.end as usize];
+            string.push_str(s);
         }
 
-        seq.end()
+        serializer.serialize_str(&string)
     }
 }
 
 #[cfg(feature = "serde")]
-impl<'de, T> Deserialize<'de> for ArenaSlice<T>
-where
-    T: Default + Copy + Eq + Hash + Deserialize<'de>,
-{
+impl<'de> Deserialize<'de> for ArenaStr {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
-        deserializer.deserialize_tuple(2, ArenaSliceVisitor::new())
+        deserializer.deserialize_tuple(2, ArenaStrVisitor)
     }
 }
 
 #[cfg(feature = "serde")]
-struct ArenaSliceVisitor<T> {
-    _phantom: PhantomData<fn() -> ArenaSlice<T>>,
-}
+struct ArenaStrVisitor;
 
 #[cfg(feature = "serde")]
-impl<T> ArenaSliceVisitor<T> {
-    fn new() -> Self {
-        Self {
-            _phantom: PhantomData,
-        }
-    }
-}
-
-#[cfg(feature = "serde")]
-impl<'de, T> Visitor<'de> for ArenaSliceVisitor<T>
-where
-    T: Default + Copy + Eq + Hash + Deserialize<'de>,
-{
-    type Value = ArenaSlice<T>;
+impl<'de> Visitor<'de> for ArenaStrVisitor {
+    type Value = ArenaStr;
 
     fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
         formatter.write_str("a pair of values")
@@ -521,12 +365,12 @@ where
         let sizes: Vec<u32> = seq
             .next_element()?
             .ok_or_else(|| A::Error::invalid_length(0, &self))?;
-        let values: Vec<T> = seq
+        let string: &str = seq
             .next_element()?
             .ok_or_else(|| A::Error::invalid_length(1, &self))?;
 
-        let mut arena = ArenaSlice {
-            vec: AppendVec::with_capacity(values.len()),
+        let mut arena = ArenaStr {
+            vec: AppendStr::with_capacity(string.len()),
             ranges: AppendVec::with_capacity(sizes.len()),
             map: DashTable::with_capacity(sizes.len()),
             hasher: DefaultHashBuilder::default(),
@@ -537,7 +381,7 @@ where
         let mut start = 0;
         for size in sizes {
             let size = size as usize;
-            arena.push(&values[start..start + size]);
+            arena.push(&string[start..start + size]);
             start += size;
         }
 
@@ -549,11 +393,12 @@ where
 mod delta {
     use super::*;
     use crate::{Accumulator, DeltaEncoding};
+    use serde::ser::SerializeSeq;
+    use std::marker::PhantomData;
 
-    impl<T, Delta, Accum> Serialize for DeltaEncoding<&ArenaSlice<T>, Accum>
+    impl<Accum> Serialize for DeltaEncoding<&ArenaStr, Accum>
     where
-        Delta: Serialize,
-        Accum: Accumulator<Value = [T], Storage = Box<[T]>, DeltaStorage = Box<[Delta]>>,
+        Accum: Accumulator<Value = str, Storage = Box<str>, DeltaStorage = Box<[u8]>>,
     {
         fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
         where
@@ -568,7 +413,7 @@ mod delta {
             };
             tuple.serialize_element(&ranges)?;
 
-            tuple.serialize_element(&ArenaSliceWrapper {
+            tuple.serialize_element(&ArenaStrWrapper {
                 ranges_len: ranges.ranges_len.into_inner(),
                 total_len: ranges.total_len.into_inner(),
                 arena: self,
@@ -578,16 +423,15 @@ mod delta {
         }
     }
 
-    struct ArenaSliceWrapper<'a, T, Accum> {
+    struct ArenaStrWrapper<'a, Accum> {
         ranges_len: u32,
         total_len: u32,
-        arena: &'a DeltaEncoding<&'a ArenaSlice<T>, Accum>,
+        arena: &'a DeltaEncoding<&'a ArenaStr, Accum>,
     }
 
-    impl<'a, T, Delta, Accum> Serialize for ArenaSliceWrapper<'a, T, Accum>
+    impl<'a, Accum> Serialize for ArenaStrWrapper<'a, Accum>
     where
-        Delta: Serialize,
-        Accum: Accumulator<Value = [T], Storage = Box<[T]>, DeltaStorage = Box<[Delta]>>,
+        Accum: Accumulator<Value = str, Storage = Box<str>, DeltaStorage = Box<[u8]>>,
     {
         fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
         where
@@ -602,7 +446,7 @@ mod delta {
                 assert_eq!(
                     delta.len(),
                     slice.len(),
-                    "Invalid Accumulator implementation for DeltaEncoding of ArenaSlice: delta length must match source slice length"
+                    "Invalid Accumulator implementation for DeltaEncoding of ArenaStr: delta length must match source string length (in bytes)"
                 );
                 for d in delta {
                     seq.serialize_element(&d)?;
@@ -613,41 +457,35 @@ mod delta {
         }
     }
 
-    impl<'de, T, Delta, Accum> Deserialize<'de> for DeltaEncoding<ArenaSlice<T>, Accum>
+    impl<'de, Accum> Deserialize<'de> for DeltaEncoding<ArenaStr, Accum>
     where
-        T: Default + Copy + Eq + Hash,
-        Delta: Deserialize<'de>,
-        Accum: Accumulator<Value = [T], Storage = Box<[T]>, Delta = [Delta]>,
+        Accum: Accumulator<Value = str, Storage = Box<str>, Delta = [u8]>,
     {
         fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
         where
             D: Deserializer<'de>,
         {
-            deserializer.deserialize_tuple(2, DeltaArenaSliceVisitor::new())
+            deserializer.deserialize_tuple(2, DeltaArenaStrVisitor::new())
         }
     }
 
-    struct DeltaArenaSliceVisitor<T, Accum> {
-        _phantom: PhantomData<fn() -> ArenaSlice<T>>,
+    struct DeltaArenaStrVisitor<Accum> {
         _accum: PhantomData<Accum>,
     }
 
-    impl<T, Accum> DeltaArenaSliceVisitor<T, Accum> {
+    impl<Accum> DeltaArenaStrVisitor<Accum> {
         fn new() -> Self {
             Self {
-                _phantom: PhantomData,
                 _accum: PhantomData,
             }
         }
     }
 
-    impl<'de, T, Delta, Accum> Visitor<'de> for DeltaArenaSliceVisitor<T, Accum>
+    impl<'de, Accum> Visitor<'de> for DeltaArenaStrVisitor<Accum>
     where
-        T: Default + Copy + Eq + Hash,
-        Delta: Deserialize<'de>,
-        Accum: Accumulator<Value = [T], Storage = Box<[T]>, Delta = [Delta]>,
+        Accum: Accumulator<Value = str, Storage = Box<str>, Delta = [u8]>,
     {
-        type Value = DeltaEncoding<ArenaSlice<T>, Accum>;
+        type Value = DeltaEncoding<ArenaStr, Accum>;
 
         fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
             formatter.write_str("a pair of values")
@@ -660,12 +498,12 @@ mod delta {
             let sizes: Vec<u32> = seq
                 .next_element()?
                 .ok_or_else(|| A::Error::invalid_length(0, &self))?;
-            let values: Vec<Delta> = seq
+            let bytes: &[u8] = seq
                 .next_element()?
                 .ok_or_else(|| A::Error::invalid_length(1, &self))?;
 
-            let mut arena = ArenaSlice {
-                vec: AppendVec::with_capacity(values.len()),
+            let mut arena = ArenaStr {
+                vec: AppendStr::with_capacity(bytes.len()),
                 ranges: AppendVec::with_capacity(sizes.len()),
                 map: DashTable::with_capacity(sizes.len()),
                 hasher: DefaultHashBuilder::default(),
@@ -677,14 +515,14 @@ mod delta {
             let mut start = 0;
             for size in sizes {
                 let size = size as usize;
-                let delta = &values[start..start + size];
-                let slice = acc.unfold(delta);
+                let delta = &bytes[start..start + size];
+                let string = acc.unfold(delta);
                 assert_eq!(
                     delta.len(),
-                    slice.len(),
-                    "Invalid Accumulator implementation for DeltaEncoding of ArenaSlice: delta length must match destination slice length"
+                    string.len(),
+                    "Invalid Accumulator implementation for DeltaEncoding of ArenaSlice: delta length must match destination string length (in bytes)"
                 );
-                arena.push(&slice);
+                arena.push(&string);
                 start += size;
             }
 
