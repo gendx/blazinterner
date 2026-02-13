@@ -539,6 +539,50 @@ mod test {
     use super::*;
     #[cfg(all(feature = "delta", feature = "serde"))]
     use crate::{Accumulator, DeltaEncoding};
+    #[cfg(feature = "raw")]
+    use std::thread;
+
+    fn make_utf8_string(mut i: u32) -> String {
+        let mut s = String::new();
+        while i != 0 {
+            let j = i % (64 + 26);
+            let c = if j < 64 {
+                // See https://en.wikipedia.org/wiki/Cyrillic_script_in_Unicode.
+                char::from_u32(0x410 + j).expect("Invalid Unicode value")
+            } else {
+                char::from_u32(b'a' as u32 + j - 64).expect("Invalid Unicode value")
+            };
+            i /= 64 + 26;
+            s.push(c);
+        }
+        s
+    }
+
+    #[test]
+    fn test_utf8_string() {
+        assert_eq!(make_utf8_string(0), "");
+        assert_eq!(make_utf8_string(0).len(), 0);
+        assert_eq!(make_utf8_string(5), "Е");
+        assert_eq!(make_utf8_string(5).len(), 2);
+        assert_eq!(make_utf8_string(25), "Щ");
+        assert_eq!(make_utf8_string(25).len(), 2);
+        assert_eq!(make_utf8_string(125), "гБ");
+        assert_eq!(make_utf8_string(125).len(), 4);
+        assert_eq!(make_utf8_string(625), "vЖ");
+        assert_eq!(make_utf8_string(625).len(), 3);
+        assert_eq!(make_utf8_string(3125), "bв");
+        assert_eq!(make_utf8_string(3125).len(), 3);
+        assert_eq!(make_utf8_string(15625), "чtБ");
+        assert_eq!(make_utf8_string(15625).len(), 5);
+        assert_eq!(make_utf8_string(78125), "ЕъЙ");
+        assert_eq!(make_utf8_string(78125).len(), 6);
+        assert_eq!(make_utf8_string(390625), "ЩФр");
+        assert_eq!(make_utf8_string(390625).len(), 6);
+        assert_eq!(make_utf8_string(1953125), "гЛэВ");
+        assert_eq!(make_utf8_string(1953125).len(), 8);
+        assert_eq!(make_utf8_string(9765625), "vшгН");
+        assert_eq!(make_utf8_string(9765625).len(), 7);
+    }
 
     #[test]
     fn test_lookup() {
@@ -559,6 +603,109 @@ mod test {
         assert_eq!(e.lookup(&arena), "eeeee");
     }
 
+    #[test]
+    fn test_intern_lookup() {
+        let arena = ArenaStr::default();
+        for i in 0..100 {
+            assert_eq!(arena.intern(&make_utf8_string(i)), i);
+        }
+        for i in 0..100 {
+            assert_eq!(arena.lookup_str(i), &make_utf8_string(i));
+        }
+    }
+
+    #[cfg(feature = "raw")]
+    const NUM_READERS: usize = 4;
+    #[cfg(feature = "raw")]
+    const NUM_WRITERS: usize = 4;
+    #[cfg(all(feature = "raw", not(miri)))]
+    const NUM_ITEMS: usize = 1_000_000;
+    #[cfg(all(feature = "raw", miri))]
+    const NUM_ITEMS: usize = 100;
+
+    #[cfg(feature = "raw")]
+    #[test]
+    fn test_intern_lookup_concurrent_reads() {
+        let arena = ArenaStr::default();
+        thread::scope(|s| {
+            for _ in 0..NUM_READERS {
+                s.spawn(|| {
+                    loop {
+                        let len = arena.strings();
+                        if len > 0 {
+                            let last = len as u32 - 1;
+                            assert_eq!(arena.lookup_str(last), &make_utf8_string(last));
+                            if len == NUM_ITEMS {
+                                break;
+                            }
+                        }
+                    }
+                });
+            }
+            s.spawn(|| {
+                for j in 0..NUM_ITEMS as u32 {
+                    assert_eq!(arena.intern(&make_utf8_string(j)), j);
+                }
+            });
+        });
+    }
+
+    #[cfg(feature = "raw")]
+    #[test]
+    fn test_intern_lookup_concurrent_writes() {
+        let arena = ArenaStr::default();
+        thread::scope(|s| {
+            s.spawn(|| {
+                loop {
+                    let len = arena.strings();
+                    if len > 0 {
+                        let last = len as u32 - 1;
+                        assert_eq!(arena.lookup_str(last), &make_utf8_string(last));
+                        if len == NUM_ITEMS {
+                            break;
+                        }
+                    }
+                }
+            });
+            for _ in 0..NUM_WRITERS {
+                s.spawn(|| {
+                    for j in 0..NUM_ITEMS as u32 {
+                        assert_eq!(arena.intern(&make_utf8_string(j)), j);
+                    }
+                });
+            }
+        });
+    }
+
+    #[cfg(feature = "raw")]
+    #[test]
+    fn test_intern_lookup_concurrent_readwrites() {
+        let arena = ArenaStr::default();
+        thread::scope(|s| {
+            for _ in 0..NUM_READERS {
+                s.spawn(|| {
+                    loop {
+                        let len = arena.strings();
+                        if len > 0 {
+                            let last = len as u32 - 1;
+                            assert_eq!(arena.lookup_str(last), &make_utf8_string(last));
+                            if len == NUM_ITEMS {
+                                break;
+                            }
+                        }
+                    }
+                });
+            }
+            for _ in 0..NUM_WRITERS {
+                s.spawn(|| {
+                    for j in 0..NUM_ITEMS as u32 {
+                        assert_eq!(arena.intern(&make_utf8_string(j)), j);
+                    }
+                });
+            }
+        });
+    }
+
     #[cfg(feature = "serde")]
     #[test]
     fn test_serde() {
@@ -571,23 +718,37 @@ mod test {
         let d = InternedStr::from(&arena, "dddd");
         let e = InternedStr::from(&arena, "eeeee");
 
-        let serialized = postcard::to_stdvec(&arena).expect("Failed to serialize arena");
+        assert_eq!(arena.strings(), 6);
+        assert!(arena.bytes() >= 15);
+
+        let serialized_arena = postcard::to_stdvec(&arena).expect("Failed to serialize arena");
         assert_eq!(
-            serialized,
+            serialized_arena,
             vec![
                 6, 0, 1, 2, 3, 4, 5, 15, b'a', b'b', b'b', b'c', b'c', b'c', b'd', b'd', b'd',
                 b'd', b'e', b'e', b'e', b'e', b'e'
             ]
         );
+        let new_arena: ArenaStr =
+            postcard::from_bytes(&serialized_arena).expect("Failed to deserialize arena");
+        assert_eq!(new_arena, arena);
 
-        let arena = postcard::from_bytes(&serialized).expect("Failed to deserialize arena");
+        assert_eq!(new_arena.strings(), 6);
+        assert_eq!(new_arena.bytes(), 15);
 
-        assert_eq!(empty.lookup(&arena), "");
-        assert_eq!(a.lookup(&arena), "a");
-        assert_eq!(b.lookup(&arena), "bb");
-        assert_eq!(c.lookup(&arena), "ccc");
-        assert_eq!(d.lookup(&arena), "dddd");
-        assert_eq!(e.lookup(&arena), "eeeee");
+        let serialized_handles = postcard::to_stdvec(&[empty, a, b, c, d, e])
+            .expect("Failed to serialize interned handles");
+        assert_eq!(serialized_handles, vec![0, 1, 2, 3, 4, 5]);
+        let new_handles: [InternedStr; 6] = postcard::from_bytes(&serialized_handles)
+            .expect("Failed to deserialize interned handles");
+        assert_eq!(new_handles, [empty, a, b, c, d, e]);
+
+        assert_eq!(empty.lookup(&new_arena), "");
+        assert_eq!(a.lookup(&new_arena), "a");
+        assert_eq!(b.lookup(&new_arena), "bb");
+        assert_eq!(c.lookup(&new_arena), "ccc");
+        assert_eq!(d.lookup(&new_arena), "dddd");
+        assert_eq!(e.lookup(&new_arena), "eeeee");
     }
 
     #[cfg(all(feature = "delta", feature = "serde"))]
@@ -636,24 +797,37 @@ mod test {
         let d = InternedStr::from(&arena, "dddd");
         let e = InternedStr::from(&arena, "eeeee");
 
+        assert_eq!(arena.strings(), 6);
+        assert!(arena.bytes() >= 15);
+
         let delta_encoded: DeltaEncoding<&ArenaStr, StringAccumulator> = DeltaEncoding::new(&arena);
-        let serialized = postcard::to_stdvec(&delta_encoded).expect("Failed to serialize arena");
+        let serialized_arena =
+            postcard::to_stdvec(&delta_encoded).expect("Failed to serialize arena");
         assert_eq!(
-            serialized,
+            serialized_arena,
             vec![
                 6, 0, 1, 2, 3, 4, 5, 15, 97, 3, 98, 1, 1, 99, 7, 7, 7, 100, 1, 1, 1, 1, 101
             ]
         );
-
         let delta_encoded: DeltaEncoding<ArenaStr, StringAccumulator> =
-            postcard::from_bytes(&serialized).expect("Failed to deserialize arena");
-        let arena = delta_encoded.into_inner();
+            postcard::from_bytes(&serialized_arena).expect("Failed to deserialize arena");
+        let new_arena = delta_encoded.into_inner();
 
-        assert_eq!(empty.lookup(&arena), "");
-        assert_eq!(a.lookup(&arena), "a");
-        assert_eq!(b.lookup(&arena), "bb");
-        assert_eq!(c.lookup(&arena), "ccc");
-        assert_eq!(d.lookup(&arena), "dddd");
-        assert_eq!(e.lookup(&arena), "eeeee");
+        assert_eq!(new_arena.strings(), 6);
+        assert_eq!(new_arena.bytes(), 15);
+
+        let serialized_handles = postcard::to_stdvec(&[empty, a, b, c, d, e])
+            .expect("Failed to serialize interned handles");
+        assert_eq!(serialized_handles, vec![0, 1, 2, 3, 4, 5]);
+        let new_handles: [InternedStr; 6] = postcard::from_bytes(&serialized_handles)
+            .expect("Failed to deserialize interned handles");
+        assert_eq!(new_handles, [empty, a, b, c, d, e]);
+
+        assert_eq!(empty.lookup(&new_arena), "");
+        assert_eq!(a.lookup(&new_arena), "a");
+        assert_eq!(b.lookup(&new_arena), "bb");
+        assert_eq!(c.lookup(&new_arena), "ccc");
+        assert_eq!(d.lookup(&new_arena), "dddd");
+        assert_eq!(e.lookup(&new_arena), "eeeee");
     }
 }

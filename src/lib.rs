@@ -596,9 +596,115 @@ where
 mod test {
     use super::*;
     use std::borrow::Cow;
+    #[cfg(feature = "raw")]
+    use std::thread;
 
     #[test]
-    fn test_str_interner() {
+    fn test_intern_lookup() {
+        let arena: Arena<u32> = Arena::default();
+        for i in 0..100 {
+            assert_eq!(arena.intern(2 * i), i);
+        }
+        for i in 0..100 {
+            assert_eq!(*arena.lookup_ref(i), 2 * i);
+            assert_eq!(arena.lookup(i), 2 * i);
+        }
+    }
+
+    #[cfg(feature = "raw")]
+    const NUM_READERS: usize = 4;
+    #[cfg(feature = "raw")]
+    const NUM_WRITERS: usize = 4;
+    #[cfg(all(feature = "raw", not(miri)))]
+    const NUM_ITEMS: usize = 1_000_000;
+    #[cfg(all(feature = "raw", miri))]
+    const NUM_ITEMS: usize = 100;
+
+    #[cfg(feature = "raw")]
+    #[test]
+    fn test_intern_lookup_concurrent_reads() {
+        let arena: Arena<u32, Box<u32>> = Arena::default();
+        thread::scope(|s| {
+            for _ in 0..NUM_READERS {
+                s.spawn(|| {
+                    loop {
+                        let len = arena.len();
+                        if len > 0 {
+                            let last = len as u32 - 1;
+                            assert_eq!(*arena.lookup_ref(last), last);
+                            if len == NUM_ITEMS {
+                                break;
+                            }
+                        }
+                    }
+                });
+            }
+            s.spawn(|| {
+                for j in 0..NUM_ITEMS as u32 {
+                    assert_eq!(arena.intern(j), j);
+                }
+            });
+        });
+    }
+
+    #[cfg(feature = "raw")]
+    #[test]
+    fn test_intern_lookup_concurrent_writes() {
+        let arena: Arena<u32, Box<u32>> = Arena::default();
+        thread::scope(|s| {
+            s.spawn(|| {
+                loop {
+                    let len = arena.len();
+                    if len > 0 {
+                        let last = len as u32 - 1;
+                        assert_eq!(*arena.lookup_ref(last), last);
+                        if len == NUM_ITEMS {
+                            break;
+                        }
+                    }
+                }
+            });
+            for _ in 0..NUM_WRITERS {
+                s.spawn(|| {
+                    for j in 0..NUM_ITEMS as u32 {
+                        assert_eq!(arena.intern(j), j);
+                    }
+                });
+            }
+        });
+    }
+
+    #[cfg(feature = "raw")]
+    #[test]
+    fn test_intern_lookup_concurrent_readwrites() {
+        let arena: Arena<u32, Box<u32>> = Arena::default();
+        thread::scope(|s| {
+            for _ in 0..NUM_READERS {
+                s.spawn(|| {
+                    loop {
+                        let len = arena.len();
+                        if len > 0 {
+                            let last = len as u32 - 1;
+                            assert_eq!(*arena.lookup_ref(last), last);
+                            if len == NUM_ITEMS {
+                                break;
+                            }
+                        }
+                    }
+                });
+            }
+            for _ in 0..NUM_WRITERS {
+                s.spawn(|| {
+                    for j in 0..NUM_ITEMS as u32 {
+                        assert_eq!(arena.intern(j), j);
+                    }
+                });
+            }
+        });
+    }
+
+    #[test]
+    fn test_boxed_str_interner() {
         let arena: Arena<str, Box<str>> = Arena::default();
 
         let key: &str = "Hello";
@@ -615,5 +721,45 @@ mod test {
 
         let key: Cow<'_, str> = "Hello world".into();
         assert_eq!(arena.intern(key), 2);
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn test_serde() {
+        let arena: Arena<u32> = Arena::default();
+
+        let a = Interned::from(&arena, 0);
+        let b = Interned::from(&arena, 1);
+        let c = Interned::from(&arena, 22);
+        let d = Interned::from(&arena, 333);
+        let e = Interned::from(&arena, 4444);
+        let f = Interned::from(&arena, 55555);
+
+        assert_eq!(arena.len(), 6);
+
+        let serialized_arena = postcard::to_stdvec(&arena).expect("Failed to serialize arena");
+        assert_eq!(
+            serialized_arena,
+            vec![6, 0, 1, 22, 205, 2, 220, 34, 131, 178, 3]
+        );
+        let new_arena: Arena<u32> =
+            postcard::from_bytes(&serialized_arena).expect("Failed to deserialize arena");
+        assert_eq!(new_arena, arena);
+
+        assert_eq!(new_arena.len(), 6);
+
+        let serialized_handles =
+            postcard::to_stdvec(&[a, b, c, d, e, f]).expect("Failed to serialize interned handles");
+        assert_eq!(serialized_handles, vec![0, 1, 2, 3, 4, 5]);
+        let new_handles: [Interned<u32>; 6] = postcard::from_bytes(&serialized_handles)
+            .expect("Failed to deserialize interned handles");
+        assert_eq!(new_handles, [a, b, c, d, e, f]);
+
+        assert_eq!(a.lookup(&new_arena), 0);
+        assert_eq!(b.lookup(&new_arena), 1);
+        assert_eq!(c.lookup(&new_arena), 22);
+        assert_eq!(d.lookup(&new_arena), 333);
+        assert_eq!(e.lookup(&new_arena), 4444);
+        assert_eq!(f.lookup(&new_arena), 55555);
     }
 }
