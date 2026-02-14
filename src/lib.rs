@@ -310,7 +310,20 @@ pub struct Arena<T: ?Sized, Storage = T> {
     _phantom: PhantomData<fn() -> *const T>,
 }
 
-#[cfg(feature = "raw")]
+impl<T: ?Sized, Storage> Clone for Arena<T, Storage>
+where
+    T: Eq + Hash,
+    Storage: Borrow<T> + Clone,
+{
+    fn clone(&self) -> Self {
+        let mut arena = Self::with_capacity(self.len());
+        for value in self.vec.iter() {
+            arena.push(value.clone());
+        }
+        arena
+    }
+}
+
 impl<T: ?Sized, Storage> Arena<T, Storage> {
     /// Creates a new arena with pre-allocated space to store at least `len`
     /// values of type `T`.
@@ -477,7 +490,6 @@ where
 
     /// Unconditionally push a value, without validating that it's already
     /// interned.
-    #[cfg(any(feature = "serde", feature = "raw"))]
     fn push(&mut self, value: Storage) -> u32 {
         #[cfg(feature = "debug")]
         self.references.fetch_add(1, atomic::Ordering::Relaxed);
@@ -596,7 +608,6 @@ where
 mod test {
     use super::*;
     use std::borrow::Cow;
-    #[cfg(feature = "raw")]
     use std::thread;
 
     #[test]
@@ -611,16 +622,13 @@ mod test {
         }
     }
 
-    #[cfg(feature = "raw")]
     const NUM_READERS: usize = 4;
-    #[cfg(feature = "raw")]
     const NUM_WRITERS: usize = 4;
-    #[cfg(all(feature = "raw", not(miri)))]
+    #[cfg(not(miri))]
     const NUM_ITEMS: usize = 1_000_000;
-    #[cfg(all(feature = "raw", miri))]
+    #[cfg(miri)]
     const NUM_ITEMS: usize = 100;
 
-    #[cfg(feature = "raw")]
     #[test]
     fn test_intern_lookup_concurrent_reads() {
         let arena: Arena<u32, Box<u32>> = Arena::default();
@@ -647,7 +655,6 @@ mod test {
         });
     }
 
-    #[cfg(feature = "raw")]
     #[test]
     fn test_intern_lookup_concurrent_writes() {
         let arena: Arena<u32, Box<u32>> = Arena::default();
@@ -674,7 +681,6 @@ mod test {
         });
     }
 
-    #[cfg(feature = "raw")]
     #[test]
     fn test_intern_lookup_concurrent_readwrites() {
         let arena: Arena<u32, Box<u32>> = Arena::default();

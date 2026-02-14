@@ -186,7 +186,19 @@ pub struct ArenaSlice<T> {
     references: AtomicUsize,
 }
 
-#[cfg(feature = "raw")]
+impl<T> Clone for ArenaSlice<T>
+where
+    T: Default + Copy + Eq + Hash,
+{
+    fn clone(&self) -> Self {
+        let mut arena = Self::with_capacity(self.slices(), self.items());
+        for slice in self.iter() {
+            arena.push(slice);
+        }
+        arena
+    }
+}
+
 impl<T> ArenaSlice<T> {
     /// Creates a new arena with pre-allocated space to store at least the given
     /// number of slices, totalling the given number of items of type `T`.
@@ -359,7 +371,6 @@ where
 
     /// Unconditionally push a value, without validating that it's already
     /// interned.
-    #[cfg(any(feature = "serde", feature = "raw"))]
     fn push(&mut self, value: &[T]) -> u32 {
         #[cfg(feature = "debug")]
         self.references.fetch_add(1, atomic::Ordering::Relaxed);

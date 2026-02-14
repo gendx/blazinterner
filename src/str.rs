@@ -80,7 +80,16 @@ pub struct ArenaStr {
     references: AtomicUsize,
 }
 
-#[cfg(feature = "raw")]
+impl Clone for ArenaStr {
+    fn clone(&self) -> Self {
+        let mut arena = Self::with_capacity(self.strings(), self.bytes());
+        for s in self.iter() {
+            arena.push(s);
+        }
+        arena
+    }
+}
+
 impl ArenaStr {
     /// Creates a new arena with pre-allocated space to store at least the given
     /// number of strings, totalling the given number of bytes.
@@ -226,7 +235,6 @@ impl ArenaStr {
 
     /// Unconditionally push a value, without validating that it's already
     /// interned.
-    #[cfg(any(feature = "serde", feature = "raw"))]
     fn push(&mut self, value: &str) -> u32 {
         #[cfg(feature = "debug")]
         self.references.fetch_add(1, atomic::Ordering::Relaxed);
@@ -535,7 +543,6 @@ mod test {
     use super::*;
     #[cfg(all(feature = "delta", feature = "serde"))]
     use crate::{Accumulator, DeltaEncoding};
-    #[cfg(feature = "raw")]
     use std::thread;
 
     fn make_utf8_string(mut i: u32) -> String {
@@ -610,16 +617,13 @@ mod test {
         }
     }
 
-    #[cfg(feature = "raw")]
     const NUM_READERS: usize = 4;
-    #[cfg(feature = "raw")]
     const NUM_WRITERS: usize = 4;
-    #[cfg(all(feature = "raw", not(miri)))]
+    #[cfg(not(miri))]
     const NUM_ITEMS: usize = 1_000_000;
-    #[cfg(all(feature = "raw", miri))]
+    #[cfg(miri)]
     const NUM_ITEMS: usize = 100;
 
-    #[cfg(feature = "raw")]
     #[test]
     fn test_intern_lookup_concurrent_reads() {
         let arena = ArenaStr::default();
@@ -646,7 +650,6 @@ mod test {
         });
     }
 
-    #[cfg(feature = "raw")]
     #[test]
     fn test_intern_lookup_concurrent_writes() {
         let arena = ArenaStr::default();
@@ -673,7 +676,6 @@ mod test {
         });
     }
 
-    #[cfg(feature = "raw")]
     #[test]
     fn test_intern_lookup_concurrent_readwrites() {
         let arena = ArenaStr::default();
