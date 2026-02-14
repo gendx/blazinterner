@@ -725,7 +725,7 @@ mod test {
 
     #[cfg(feature = "serde")]
     #[test]
-    fn test_serde() {
+    fn test_serde_postcard() {
         let arena: Arena<u32> = Arena::default();
 
         let a = Interned::from(&arena, 0);
@@ -761,5 +761,35 @@ mod test {
         assert_eq!(d.lookup(&new_arena), 333);
         assert_eq!(e.lookup(&new_arena), 4444);
         assert_eq!(f.lookup(&new_arena), 55555);
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn test_serde_json() {
+        let arena: Arena<u32> = Arena::default();
+
+        let a = Interned::from(&arena, 0);
+        let b = Interned::from(&arena, 1);
+        let c = Interned::from(&arena, 22);
+        let d = Interned::from(&arena, 333);
+        let e = Interned::from(&arena, 4444);
+        let f = Interned::from(&arena, 55555);
+
+        assert_eq!(arena.len(), 6);
+
+        let serialized_arena = serde_json::to_string(&arena).expect("Failed to serialize arena");
+        assert_eq!(serialized_arena, "[0,1,22,333,4444,55555]");
+        let new_arena: Arena<u32> =
+            serde_json::from_str(&serialized_arena).expect("Failed to deserialize arena");
+        assert_eq!(new_arena, arena);
+
+        assert_eq!(new_arena.len(), 6);
+
+        let serialized_handles = serde_json::to_string(&[a, b, c, d, e, f])
+            .expect("Failed to serialize interned handles");
+        assert_eq!(serialized_handles, "[0,1,2,3,4,5]");
+        let new_handles: [Interned<u32>; 6] = serde_json::from_str(&serialized_handles)
+            .expect("Failed to deserialize interned handles");
+        assert_eq!(new_handles, [a, b, c, d, e, f]);
     }
 }

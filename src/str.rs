@@ -11,8 +11,6 @@ use serde::ser::SerializeTuple;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 #[cfg(feature = "serde")]
-use serde_tuple::{Deserialize_tuple, Serialize_tuple};
-#[cfg(feature = "serde")]
 use std::cell::Cell;
 use std::fmt::Debug;
 use std::hash::{BuildHasher, Hash};
@@ -22,14 +20,12 @@ use std::sync::atomic::{self, AtomicUsize};
 /// A handle to an interned value in an [`ArenaStr`].
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[cfg_attr(feature = "get-size2", derive(GetSize))]
-#[cfg_attr(feature = "serde", derive(Serialize_tuple, Deserialize_tuple))]
-pub struct InternedStr {
-    id: u32,
-}
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub struct InternedStr(u32);
 
 impl Debug for InternedStr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_tuple("I").field(&self.id).finish()
+        f.debug_tuple("I").field(&self.0).finish()
     }
 }
 
@@ -41,7 +37,7 @@ impl InternedStr {
     /// [`from()`](Self::from) API to intern a value, unless you really know
     /// what you're doing.
     pub fn from_id(id: u32) -> Self {
-        Self { id }
+        Self(id)
     }
 
     /// Obtains the underlying interning index.
@@ -50,7 +46,7 @@ impl InternedStr {
     /// [`lookup()`](Self::lookup) API, unless you really know what you're
     /// doing.
     pub fn id(&self) -> u32 {
-        self.id
+        self.0
     }
 }
 
@@ -61,7 +57,7 @@ impl InternedStr {
     /// will simply be returned. Otherwise it will be stored into the arena.
     pub fn from(arena: &ArenaStr, value: &str) -> Self {
         let id = arena.intern(value);
-        Self { id }
+        Self(id)
     }
 
     /// Retrieves this interned value from the given [`ArenaStr`].
@@ -70,7 +66,7 @@ impl InternedStr {
     /// intern this value, otherwise an arbitrary value will be returned or
     /// a panic will happen.
     pub fn lookup<'a>(&self, arena: &'a ArenaStr) -> &'a str {
-        arena.lookup_str(self.id)
+        arena.lookup_str(self.0)
     }
 }
 
@@ -708,7 +704,7 @@ mod test {
 
     #[cfg(feature = "serde")]
     #[test]
-    fn test_serde() {
+    fn test_serde_postcard() {
         let arena = ArenaStr::default();
 
         let empty = InternedStr::from(&arena, "");
@@ -749,6 +745,38 @@ mod test {
         assert_eq!(c.lookup(&new_arena), "ccc");
         assert_eq!(d.lookup(&new_arena), "dddd");
         assert_eq!(e.lookup(&new_arena), "eeeee");
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn test_serde_json() {
+        let arena = ArenaStr::default();
+
+        let empty = InternedStr::from(&arena, "");
+        let a = InternedStr::from(&arena, "a");
+        let b = InternedStr::from(&arena, "bb");
+        let c = InternedStr::from(&arena, "ccc");
+        let d = InternedStr::from(&arena, "dddd");
+        let e = InternedStr::from(&arena, "eeeee");
+
+        assert_eq!(arena.strings(), 6);
+        assert!(arena.bytes() >= 15);
+
+        let serialized_arena = serde_json::to_string(&arena).expect("Failed to serialize arena");
+        assert_eq!(serialized_arena, r#"[[0,1,2,3,4,5],"abbcccddddeeeee"]"#);
+        let new_arena: ArenaStr =
+            serde_json::from_str(&serialized_arena).expect("Failed to deserialize arena");
+        assert_eq!(new_arena, arena);
+
+        assert_eq!(new_arena.strings(), 6);
+        assert_eq!(new_arena.bytes(), 15);
+
+        let serialized_handles = serde_json::to_string(&[empty, a, b, c, d, e])
+            .expect("Failed to serialize interned handles");
+        assert_eq!(serialized_handles, "[0,1,2,3,4,5]");
+        let new_handles: [InternedStr; 6] = serde_json::from_str(&serialized_handles)
+            .expect("Failed to deserialize interned handles");
+        assert_eq!(new_handles, [empty, a, b, c, d, e]);
     }
 
     #[cfg(all(feature = "delta", feature = "serde"))]
