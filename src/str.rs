@@ -142,6 +142,12 @@ impl ArenaStr {
             .iter()
             .map(|&range| &self.vec[range.start as usize..range.end as usize])
     }
+
+    fn iter_bytes(&self) -> impl Iterator<Item = &[u8]> {
+        self.ranges
+            .iter()
+            .map(|&range| self.vec.get_bytes(range.start as usize..range.end as usize))
+    }
 }
 
 impl Default for ArenaStr {
@@ -165,7 +171,7 @@ impl Debug for ArenaStr {
 
 impl PartialEq for ArenaStr {
     fn eq(&self, other: &Self) -> bool {
-        self.iter().eq(other.iter())
+        self.iter_bytes().eq(other.iter_bytes())
     }
 }
 
@@ -263,8 +269,22 @@ impl ArenaStr {
     /// The caller is responsible for ensuring that the same arena was used to
     /// intern this value, otherwise an arbitrary value will be returned or
     /// a panic will happen.
+    ///
+    /// If you only need to access the bytes,
+    /// [`lookup_bytes()`](Self::lookup_bytes) may be more efficient.
     pub fn lookup(&self, interned: InternedStr) -> &str {
         self.lookup_str(interned.0)
+    }
+
+    /// Retrieves the bytes for the given [`InternedStr`] value from this arena.
+    ///
+    /// The caller is responsible for ensuring that the same arena was used to
+    /// intern this value, otherwise an arbitrary value will be returned or
+    /// a panic will happen.
+    pub fn lookup_bytes(&self, interned: InternedStr) -> &[u8] {
+        let range = self.ranges[interned.0 as usize];
+        let range = range.start as usize..range.end as usize;
+        self.vec.get_bytes(range)
     }
 
     fn lookup_str(&self, id: u32) -> &str {
