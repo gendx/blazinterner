@@ -37,7 +37,7 @@ impl InternedStr {
     /// [`from()`](Self::from) API to intern a value, unless you really know
     /// what you're doing.
     pub fn from_id(id: u32) -> Self {
-        Self(id)
+        Self::new(id)
     }
 
     /// Obtains the underlying interning index.
@@ -51,22 +51,8 @@ impl InternedStr {
 }
 
 impl InternedStr {
-    /// Interns the given value in the given [`ArenaStr`].
-    ///
-    /// If the value was already interned in this arena, its interning index
-    /// will simply be returned. Otherwise it will be stored into the arena.
-    pub fn from(arena: &ArenaStr, value: &str) -> Self {
-        let id = arena.intern(value);
+    fn new(id: u32) -> Self {
         Self(id)
-    }
-
-    /// Retrieves this interned value from the given [`ArenaStr`].
-    ///
-    /// The caller is responsible for ensuring that the same arena was used to
-    /// intern this value, otherwise an arbitrary value will be returned or
-    /// a panic will happen.
-    pub fn lookup<'a>(&self, arena: &'a ArenaStr) -> &'a str {
-        arena.lookup_str(self.0)
     }
 }
 
@@ -220,12 +206,16 @@ impl ArenaStr {
 }
 
 impl ArenaStr {
-    fn intern(&self, value: &str) -> u32 {
+    /// Interns the given value in this arena.
+    ///
+    /// If the value was already interned in this arena, its interning index
+    /// will simply be returned. Otherwise it will be stored into the arena.
+    pub fn intern(&self, value: &str) -> InternedStr {
         #[cfg(feature = "debug")]
         self.references.fetch_add(1, atomic::Ordering::Relaxed);
 
         let hash = self.hasher.hash_one(value);
-        *self
+        let id = *self
             .map
             .entry(
                 hash,
@@ -242,7 +232,8 @@ impl ArenaStr {
                 assert!(id <= u32::MAX as usize);
                 id as u32
             })
-            .get()
+            .get();
+        InternedStr::new(id)
     }
 
     /// Unconditionally push a value, without validating that it's already
@@ -264,8 +255,16 @@ impl ArenaStr {
 
         self.map
             .insert_unique(hash, id, |&i| self.hasher.hash_one(self.lookup_str(i)));
-
         id
+    }
+
+    /// Retrieves the given [`InternedStr`] value from this arena.
+    ///
+    /// The caller is responsible for ensuring that the same arena was used to
+    /// intern this value, otherwise an arbitrary value will be returned or
+    /// a panic will happen.
+    pub fn lookup(&self, interned: InternedStr) -> &str {
+        self.lookup_str(interned.0)
     }
 
     fn lookup_str(&self, id: u32) -> &str {
@@ -603,29 +602,29 @@ mod test {
     fn test_lookup() {
         let arena = ArenaStr::default();
 
-        let empty = InternedStr::from(&arena, "");
-        let a = InternedStr::from(&arena, "a");
-        let b = InternedStr::from(&arena, "bb");
-        let c = InternedStr::from(&arena, "ccc");
-        let d = InternedStr::from(&arena, "dddd");
-        let e = InternedStr::from(&arena, "eeeee");
+        let empty = arena.intern("");
+        let a = arena.intern("a");
+        let b = arena.intern("bb");
+        let c = arena.intern("ccc");
+        let d = arena.intern("dddd");
+        let e = arena.intern("eeeee");
 
-        assert_eq!(empty.lookup(&arena), "");
-        assert_eq!(a.lookup(&arena), "a");
-        assert_eq!(b.lookup(&arena), "bb");
-        assert_eq!(c.lookup(&arena), "ccc");
-        assert_eq!(d.lookup(&arena), "dddd");
-        assert_eq!(e.lookup(&arena), "eeeee");
+        assert_eq!(arena.lookup(empty), "");
+        assert_eq!(arena.lookup(a), "a");
+        assert_eq!(arena.lookup(b), "bb");
+        assert_eq!(arena.lookup(c), "ccc");
+        assert_eq!(arena.lookup(d), "dddd");
+        assert_eq!(arena.lookup(e), "eeeee");
     }
 
     #[test]
     fn test_intern_lookup() {
         let arena = ArenaStr::default();
         for i in 0..100 {
-            assert_eq!(arena.intern(&make_utf8_string(i)), i);
+            assert_eq!(arena.intern(&make_utf8_string(i)).0, i);
         }
         for i in 0..100 {
-            assert_eq!(arena.lookup_str(i), &make_utf8_string(i));
+            assert_eq!(arena.lookup(InternedStr::new(i)), &make_utf8_string(i));
         }
     }
 
@@ -646,7 +645,10 @@ mod test {
                         let len = arena.strings();
                         if len > 0 {
                             let last = len as u32 - 1;
-                            assert_eq!(arena.lookup_str(last), &make_utf8_string(last));
+                            assert_eq!(
+                                arena.lookup(InternedStr::new(last)),
+                                &make_utf8_string(last)
+                            );
                             if len == NUM_ITEMS {
                                 break;
                             }
@@ -656,7 +658,7 @@ mod test {
             }
             s.spawn(|| {
                 for j in 0..NUM_ITEMS as u32 {
-                    assert_eq!(arena.intern(&make_utf8_string(j)), j);
+                    assert_eq!(arena.intern(&make_utf8_string(j)).0, j);
                 }
             });
         });
@@ -671,7 +673,10 @@ mod test {
                     let len = arena.strings();
                     if len > 0 {
                         let last = len as u32 - 1;
-                        assert_eq!(arena.lookup_str(last), &make_utf8_string(last));
+                        assert_eq!(
+                            arena.lookup(InternedStr::new(last)),
+                            &make_utf8_string(last)
+                        );
                         if len == NUM_ITEMS {
                             break;
                         }
@@ -681,7 +686,7 @@ mod test {
             for _ in 0..NUM_WRITERS {
                 s.spawn(|| {
                     for j in 0..NUM_ITEMS as u32 {
-                        assert_eq!(arena.intern(&make_utf8_string(j)), j);
+                        assert_eq!(arena.intern(&make_utf8_string(j)).0, j);
                     }
                 });
             }
@@ -698,7 +703,10 @@ mod test {
                         let len = arena.strings();
                         if len > 0 {
                             let last = len as u32 - 1;
-                            assert_eq!(arena.lookup_str(last), &make_utf8_string(last));
+                            assert_eq!(
+                                arena.lookup(InternedStr::new(last)),
+                                &make_utf8_string(last)
+                            );
                             if len == NUM_ITEMS {
                                 break;
                             }
@@ -709,7 +717,7 @@ mod test {
             for _ in 0..NUM_WRITERS {
                 s.spawn(|| {
                     for j in 0..NUM_ITEMS as u32 {
-                        assert_eq!(arena.intern(&make_utf8_string(j)), j);
+                        assert_eq!(arena.intern(&make_utf8_string(j)).0, j);
                     }
                 });
             }
@@ -721,12 +729,12 @@ mod test {
     fn test_serde_postcard() {
         let arena = ArenaStr::default();
 
-        let empty = InternedStr::from(&arena, "");
-        let a = InternedStr::from(&arena, "a");
-        let b = InternedStr::from(&arena, "bb");
-        let c = InternedStr::from(&arena, "ccc");
-        let d = InternedStr::from(&arena, "dddd");
-        let e = InternedStr::from(&arena, "eeeee");
+        let empty = arena.intern("");
+        let a = arena.intern("a");
+        let b = arena.intern("bb");
+        let c = arena.intern("ccc");
+        let d = arena.intern("dddd");
+        let e = arena.intern("eeeee");
 
         assert_eq!(arena.strings(), 6);
         assert!(arena.bytes() >= 15);
@@ -753,12 +761,12 @@ mod test {
             .expect("Failed to deserialize interned handles");
         assert_eq!(new_handles, [empty, a, b, c, d, e]);
 
-        assert_eq!(empty.lookup(&new_arena), "");
-        assert_eq!(a.lookup(&new_arena), "a");
-        assert_eq!(b.lookup(&new_arena), "bb");
-        assert_eq!(c.lookup(&new_arena), "ccc");
-        assert_eq!(d.lookup(&new_arena), "dddd");
-        assert_eq!(e.lookup(&new_arena), "eeeee");
+        assert_eq!(new_arena.lookup(empty), "");
+        assert_eq!(new_arena.lookup(a), "a");
+        assert_eq!(new_arena.lookup(b), "bb");
+        assert_eq!(new_arena.lookup(c), "ccc");
+        assert_eq!(new_arena.lookup(d), "dddd");
+        assert_eq!(new_arena.lookup(e), "eeeee");
     }
 
     #[cfg(feature = "serde")]
@@ -766,12 +774,12 @@ mod test {
     fn test_serde_json() {
         let arena = ArenaStr::default();
 
-        let empty = InternedStr::from(&arena, "");
-        let a = InternedStr::from(&arena, "a");
-        let b = InternedStr::from(&arena, "bb");
-        let c = InternedStr::from(&arena, "ccc");
-        let d = InternedStr::from(&arena, "dddd");
-        let e = InternedStr::from(&arena, "eeeee");
+        let empty = arena.intern("");
+        let a = arena.intern("a");
+        let b = arena.intern("bb");
+        let c = arena.intern("ccc");
+        let d = arena.intern("dddd");
+        let e = arena.intern("eeeee");
 
         assert_eq!(arena.strings(), 6);
         assert!(arena.bytes() >= 15);
@@ -832,12 +840,12 @@ mod test {
     fn test_serde_delta() {
         let arena = ArenaStr::default();
 
-        let empty = InternedStr::from(&arena, "");
-        let a = InternedStr::from(&arena, "a");
-        let b = InternedStr::from(&arena, "bb");
-        let c = InternedStr::from(&arena, "ccc");
-        let d = InternedStr::from(&arena, "dddd");
-        let e = InternedStr::from(&arena, "eeeee");
+        let empty = arena.intern("");
+        let a = arena.intern("a");
+        let b = arena.intern("bb");
+        let c = arena.intern("ccc");
+        let d = arena.intern("dddd");
+        let e = arena.intern("eeeee");
 
         assert_eq!(arena.strings(), 6);
         assert!(arena.bytes() >= 15);
@@ -865,11 +873,11 @@ mod test {
             .expect("Failed to deserialize interned handles");
         assert_eq!(new_handles, [empty, a, b, c, d, e]);
 
-        assert_eq!(empty.lookup(&new_arena), "");
-        assert_eq!(a.lookup(&new_arena), "a");
-        assert_eq!(b.lookup(&new_arena), "bb");
-        assert_eq!(c.lookup(&new_arena), "ccc");
-        assert_eq!(d.lookup(&new_arena), "dddd");
-        assert_eq!(e.lookup(&new_arena), "eeeee");
+        assert_eq!(new_arena.lookup(empty), "");
+        assert_eq!(new_arena.lookup(a), "a");
+        assert_eq!(new_arena.lookup(b), "bb");
+        assert_eq!(new_arena.lookup(c), "ccc");
+        assert_eq!(new_arena.lookup(d), "dddd");
+        assert_eq!(new_arena.lookup(e), "eeeee");
     }
 }

@@ -125,10 +125,7 @@ impl<T: ?Sized, Storage> Interned<T, Storage> {
     /// [`from()`](Self::from) API to intern a value, unless you really know
     /// what you're doing.
     pub fn from_id(id: u32) -> Self {
-        Self {
-            id,
-            _phantom: PhantomData,
-        }
+        Self::new(id)
     }
 
     /// Obtains the underlying interning index.
@@ -141,55 +138,12 @@ impl<T: ?Sized, Storage> Interned<T, Storage> {
     }
 }
 
-impl<T: ?Sized, Storage> Interned<T, Storage>
-where
-    T: Eq + Hash,
-    Storage: Borrow<T>,
-{
-    /// Interns the given value in the given [`Arena`].
-    ///
-    /// If the value was already interned in this arena, it will simply be
-    /// borrowed to retrieve its interning index. Otherwise it will then be
-    /// converted to store it into the arena.
-    pub fn from(arena: &Arena<T, Storage>, value: impl Borrow<T> + Into<Storage>) -> Self {
-        let id = arena.intern(value);
+impl<T: ?Sized, Storage> Interned<T, Storage> {
+    fn new(id: u32) -> Self {
         Self {
             id,
             _phantom: PhantomData,
         }
-    }
-}
-
-impl<T: ?Sized, Storage> Interned<T, Storage>
-where
-    Storage: Clone,
-{
-    /// Retrieves this interned value from the given [`Arena`].
-    ///
-    /// The caller is responsible for ensuring that the same arena was used to
-    /// intern this value, otherwise an arbitrary value will be returned or
-    /// a panic will happen.
-    ///
-    /// See also [`lookup_ref()`](Self::lookup_ref) if you only need a
-    /// reference.
-    pub fn lookup(&self, arena: &Arena<T, Storage>) -> Storage {
-        arena.lookup(self.id)
-    }
-}
-
-impl<T: ?Sized, Storage> Interned<T, Storage>
-where
-    Storage: Borrow<T>,
-{
-    /// Retrieves a reference to this interned value from the given [`Arena`].
-    ///
-    /// The caller is responsible for ensuring that the same arena was used to
-    /// intern this value, otherwise an arbitrary value will be returned or
-    /// a panic will happen.
-    ///
-    /// See also [`lookup()`](Self::lookup) if you need an owned value.
-    pub fn lookup_ref<'a>(&self, arena: &'a Arena<T, Storage>) -> &'a T {
-        arena.lookup_ref(self.id)
     }
 }
 
@@ -487,12 +441,17 @@ where
     T: Eq + Hash,
     Storage: Borrow<T>,
 {
-    fn intern(&self, value: impl Borrow<T> + Into<Storage>) -> u32 {
+    /// Interns the given value in this arena.
+    ///
+    /// If the value was already interned in this arena, it will simply be
+    /// borrowed to retrieve its interning index. Otherwise it will then be
+    /// converted to store it into the arena.
+    pub fn intern(&self, value: impl Borrow<T> + Into<Storage>) -> Interned<T, Storage> {
         #[cfg(feature = "debug")]
         self.references.fetch_add(1, atomic::Ordering::Relaxed);
 
         let hash = self.hasher.hash_one(value.borrow());
-        *self
+        let id = *self
             .map
             .entry(
                 hash,
@@ -505,7 +464,8 @@ where
                 assert!(id <= u32::MAX as usize);
                 id as u32
             })
-            .get()
+            .get();
+        Interned::new(id)
     }
 
     /// Unconditionally push a value, without validating that it's already
@@ -523,7 +483,6 @@ where
         self.map.insert_unique(hash, id, |&i| {
             self.hasher.hash_one(self.vec[i as usize].borrow())
         });
-
         id
     }
 }
@@ -532,8 +491,16 @@ impl<T: ?Sized, Storage> Arena<T, Storage>
 where
     Storage: Clone,
 {
-    fn lookup(&self, id: u32) -> Storage {
-        self.vec[id as usize].clone()
+    /// Retrieves the given [`Interned`] value from this arena.
+    ///
+    /// The caller is responsible for ensuring that the same arena was used to
+    /// intern this value, otherwise an arbitrary value will be returned or
+    /// a panic will happen.
+    ///
+    /// See also [`lookup_ref()`](Self::lookup_ref) if you only need a
+    /// reference.
+    pub fn lookup(&self, interned: Interned<T, Storage>) -> Storage {
+        self.vec[interned.id as usize].clone()
     }
 }
 
@@ -541,8 +508,15 @@ impl<T: ?Sized, Storage> Arena<T, Storage>
 where
     Storage: Borrow<T>,
 {
-    fn lookup_ref(&self, id: u32) -> &T {
-        self.vec[id as usize].borrow()
+    /// Retrieves a reference to the given [`Interned`] value from this arena.
+    ///
+    /// The caller is responsible for ensuring that the same arena was used to
+    /// intern this value, otherwise an arbitrary value will be returned or
+    /// a panic will happen.
+    ///
+    /// See also [`lookup()`](Self::lookup) if you need an owned value.
+    pub fn lookup_ref(&self, interned: Interned<T, Storage>) -> &T {
+        self.vec[interned.id as usize].borrow()
     }
 }
 
@@ -634,11 +608,11 @@ mod test {
     fn test_intern_lookup() {
         let arena: Arena<u32> = Arena::default();
         for i in 0..100 {
-            assert_eq!(arena.intern(2 * i), i);
+            assert_eq!(arena.intern(2 * i).id, i);
         }
         for i in 0..100 {
-            assert_eq!(*arena.lookup_ref(i), 2 * i);
-            assert_eq!(arena.lookup(i), 2 * i);
+            assert_eq!(*arena.lookup_ref(Interned::new(i)), 2 * i);
+            assert_eq!(arena.lookup(Interned::new(i)), 2 * i);
         }
     }
 
@@ -659,7 +633,7 @@ mod test {
                         let len = arena.len();
                         if len > 0 {
                             let last = len as u32 - 1;
-                            assert_eq!(*arena.lookup_ref(last), last);
+                            assert_eq!(*arena.lookup_ref(Interned::new(last)), last);
                             if len == NUM_ITEMS {
                                 break;
                             }
@@ -669,7 +643,7 @@ mod test {
             }
             s.spawn(|| {
                 for j in 0..NUM_ITEMS as u32 {
-                    assert_eq!(arena.intern(j), j);
+                    assert_eq!(arena.intern(j).id, j);
                 }
             });
         });
@@ -684,7 +658,7 @@ mod test {
                     let len = arena.len();
                     if len > 0 {
                         let last = len as u32 - 1;
-                        assert_eq!(*arena.lookup_ref(last), last);
+                        assert_eq!(*arena.lookup_ref(Interned::new(last)), last);
                         if len == NUM_ITEMS {
                             break;
                         }
@@ -694,7 +668,7 @@ mod test {
             for _ in 0..NUM_WRITERS {
                 s.spawn(|| {
                     for j in 0..NUM_ITEMS as u32 {
-                        assert_eq!(arena.intern(j), j);
+                        assert_eq!(arena.intern(j).id, j);
                     }
                 });
             }
@@ -711,7 +685,7 @@ mod test {
                         let len = arena.len();
                         if len > 0 {
                             let last = len as u32 - 1;
-                            assert_eq!(*arena.lookup_ref(last), last);
+                            assert_eq!(*arena.lookup_ref(Interned::new(last)), last);
                             if len == NUM_ITEMS {
                                 break;
                             }
@@ -722,7 +696,7 @@ mod test {
             for _ in 0..NUM_WRITERS {
                 s.spawn(|| {
                     for j in 0..NUM_ITEMS as u32 {
-                        assert_eq!(arena.intern(j), j);
+                        assert_eq!(arena.intern(j).id, j);
                     }
                 });
             }
@@ -734,19 +708,19 @@ mod test {
         let arena: Arena<str, Box<str>> = Arena::default();
 
         let key: &str = "Hello";
-        assert_eq!(arena.intern(key), 0);
+        assert_eq!(arena.intern(key).id, 0);
 
         let key: String = "world".into();
-        assert_eq!(arena.intern(key), 1);
+        assert_eq!(arena.intern(key).id, 1);
 
         let key: Box<str> = "Hello".into();
-        assert_eq!(arena.intern(key), 0);
+        assert_eq!(arena.intern(key).id, 0);
 
         let key: Box<str> = "world".into();
-        assert_eq!(arena.intern(key), 1);
+        assert_eq!(arena.intern(key).id, 1);
 
         let key: Cow<'_, str> = "Hello world".into();
-        assert_eq!(arena.intern(key), 2);
+        assert_eq!(arena.intern(key).id, 2);
     }
 
     #[cfg(feature = "serde")]
@@ -754,12 +728,12 @@ mod test {
     fn test_serde_postcard() {
         let arena: Arena<u32> = Arena::default();
 
-        let a = Interned::from(&arena, 0);
-        let b = Interned::from(&arena, 1);
-        let c = Interned::from(&arena, 22);
-        let d = Interned::from(&arena, 333);
-        let e = Interned::from(&arena, 4444);
-        let f = Interned::from(&arena, 55555);
+        let a = arena.intern(0);
+        let b = arena.intern(1);
+        let c = arena.intern(22);
+        let d = arena.intern(333);
+        let e = arena.intern(4444);
+        let f = arena.intern(55555);
 
         assert_eq!(arena.len(), 6);
 
@@ -781,12 +755,12 @@ mod test {
             .expect("Failed to deserialize interned handles");
         assert_eq!(new_handles, [a, b, c, d, e, f]);
 
-        assert_eq!(a.lookup(&new_arena), 0);
-        assert_eq!(b.lookup(&new_arena), 1);
-        assert_eq!(c.lookup(&new_arena), 22);
-        assert_eq!(d.lookup(&new_arena), 333);
-        assert_eq!(e.lookup(&new_arena), 4444);
-        assert_eq!(f.lookup(&new_arena), 55555);
+        assert_eq!(new_arena.lookup(a), 0);
+        assert_eq!(new_arena.lookup(b), 1);
+        assert_eq!(new_arena.lookup(c), 22);
+        assert_eq!(new_arena.lookup(d), 333);
+        assert_eq!(new_arena.lookup(e), 4444);
+        assert_eq!(new_arena.lookup(f), 55555);
     }
 
     #[cfg(feature = "serde")]
@@ -794,12 +768,12 @@ mod test {
     fn test_serde_json() {
         let arena: Arena<u32> = Arena::default();
 
-        let a = Interned::from(&arena, 0);
-        let b = Interned::from(&arena, 1);
-        let c = Interned::from(&arena, 22);
-        let d = Interned::from(&arena, 333);
-        let e = Interned::from(&arena, 4444);
-        let f = Interned::from(&arena, 55555);
+        let a = arena.intern(0);
+        let b = arena.intern(1);
+        let c = arena.intern(22);
+        let d = arena.intern(333);
+        let e = arena.intern(4444);
+        let f = arena.intern(55555);
 
         assert_eq!(arena.len(), 6);
 

@@ -108,10 +108,7 @@ impl<T> InternedSlice<T> {
     /// [`from()`](Self::from) API to intern a value, unless you really know
     /// what you're doing.
     pub fn from_id(id: u32) -> Self {
-        Self {
-            id,
-            _phantom: PhantomData,
-        }
+        Self::new(id)
     }
 
     /// Obtains the underlying interning index.
@@ -124,31 +121,12 @@ impl<T> InternedSlice<T> {
     }
 }
 
-impl<T> InternedSlice<T>
-where
-    T: Default + Copy + Eq + Hash,
-{
-    /// Interns the given value in the given [`ArenaSlice`].
-    ///
-    /// If the value was already interned in this arena, its interning index
-    /// will simply be returned. Otherwise it will be stored into the arena.
-    pub fn from(arena: &ArenaSlice<T>, value: &[T]) -> Self {
-        let id = arena.intern(value);
+impl<T> InternedSlice<T> {
+    fn new(id: u32) -> Self {
         Self {
             id,
             _phantom: PhantomData,
         }
-    }
-}
-
-impl<T> InternedSlice<T> {
-    /// Retrieves this interned value from the given [`ArenaSlice`].
-    ///
-    /// The caller is responsible for ensuring that the same arena was used to
-    /// intern this value, otherwise an arbitrary value will be returned or
-    /// a panic will happen.
-    pub fn lookup<'a>(&self, arena: &'a ArenaSlice<T>) -> &'a [T] {
-        arena.lookup_slice(self.id)
     }
 }
 
@@ -364,12 +342,16 @@ impl<T> ArenaSlice<T>
 where
     T: Default + Copy + Eq + Hash,
 {
-    fn intern(&self, value: &[T]) -> u32 {
+    /// Interns the given value in this arena.
+    ///
+    /// If the value was already interned in this arena, its interning index
+    /// will simply be returned. Otherwise it will be stored into the arena.
+    pub fn intern(&self, value: &[T]) -> InternedSlice<T> {
         #[cfg(feature = "debug")]
         self.references.fetch_add(1, atomic::Ordering::Relaxed);
 
         let hash = self.hasher.hash_one(value);
-        *self
+        let id = *self
             .map
             .entry(
                 hash,
@@ -386,7 +368,8 @@ where
                 assert!(id <= u32::MAX as usize);
                 id as u32
             })
-            .get()
+            .get();
+        InternedSlice::new(id)
     }
 
     /// Unconditionally push a value, without validating that it's already
@@ -408,12 +391,20 @@ where
 
         self.map
             .insert_unique(hash, id, |&i| self.hasher.hash_one(self.lookup_slice(i)));
-
         id
     }
 }
 
 impl<T> ArenaSlice<T> {
+    /// Retrieves the given [`InternedSlice`] value from this arena.
+    ///
+    /// The caller is responsible for ensuring that the same arena was used to
+    /// intern this value, otherwise an arbitrary value will be returned or
+    /// a panic will happen.
+    pub fn lookup(&self, interned: InternedSlice<T>) -> &[T] {
+        self.lookup_slice(interned.id)
+    }
+
     fn lookup_slice(&self, id: u32) -> &[T] {
         let range = self.ranges[id as usize];
         let range = range.start as usize..range.end as usize;
