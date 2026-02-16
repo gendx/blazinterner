@@ -131,6 +131,18 @@ impl ArenaStr {
         self.strings() == 0
     }
 
+    /// Returns the given string's [`InternedStr`] handle if it is already
+    /// interned.
+    ///
+    /// Otherwise, this simply returns [`None`] without adding the string to
+    /// this arena.
+    pub fn find(&self, value: &str) -> Option<InternedStr> {
+        let hash = self.hasher.hash_one(value);
+        self.map
+            .find(hash, |&i| self.lookup_str(i) == value)
+            .map(|id| InternedStr(*id))
+    }
+
     /// Unconditionally push a value, without validating that it's already
     /// interned.
     pub fn push_mut(&mut self, value: &str) -> u32 {

@@ -241,6 +241,26 @@ impl<T> ArenaSlice<T> {
     }
 }
 
+impl<T> ArenaSlice<T>
+where
+    T: Eq + Hash,
+{
+    /// Returns the given value's [`InternedSlice`] handle if it is already
+    /// interned.
+    ///
+    /// Otherwise, this simply returns [`None`] without adding the value to this
+    /// arena.
+    pub fn find(&self, value: &[T]) -> Option<InternedSlice<T>> {
+        let hash = self.hasher.hash_one(value);
+        self.map
+            .find(hash, |&i| self.lookup_slice(i) == value)
+            .map(|id| InternedSlice {
+                id: *id,
+                _phantom: PhantomData,
+            })
+    }
+}
+
 #[cfg(feature = "raw")]
 impl<T> ArenaSlice<T>
 where

@@ -357,6 +357,26 @@ impl<T: ?Sized, Storage> Arena<T, Storage> {
     }
 }
 
+impl<T: ?Sized, Storage> Arena<T, Storage>
+where
+    T: Eq + Hash,
+    Storage: Borrow<T>,
+{
+    /// Returns the given value's [`Interned`] handle if it is already interned.
+    ///
+    /// Otherwise, this simply returns [`None`] without adding the value to this
+    /// arena.
+    pub fn find(&self, value: &T) -> Option<Interned<T, Storage>> {
+        let hash = self.hasher.hash_one(value);
+        self.map
+            .find(hash, |&i| self.vec[i as usize].borrow() == value)
+            .map(|id| Interned {
+                id: *id,
+                _phantom: PhantomData,
+            })
+    }
+}
+
 #[cfg(feature = "raw")]
 impl<T: ?Sized, Storage> Arena<T, Storage>
 where
