@@ -166,7 +166,7 @@ pub struct ArenaSlice<T> {
 
 impl<T> Clone for ArenaSlice<T>
 where
-    T: Default + Copy + Eq + Hash,
+    T: Default + Clone + Eq + Hash,
 {
     fn clone(&self) -> Self {
         let mut arena = Self::with_capacity(self.slices(), self.items());
@@ -236,18 +236,6 @@ where
                 id: *id,
                 _phantom: PhantomData,
             })
-    }
-}
-
-#[cfg(feature = "raw")]
-impl<T> ArenaSlice<T>
-where
-    T: Default + Copy + Eq + Hash,
-{
-    /// Unconditionally push a value, without validating that it's already
-    /// interned.
-    pub fn push_mut(&mut self, value: &[T]) -> u32 {
-        self.push(value)
     }
 }
 
@@ -340,12 +328,126 @@ impl<T> ArenaSlice<T> {
 
 impl<T> ArenaSlice<T>
 where
-    T: Default + Copy + Eq + Hash,
+    T: Default + Eq + Hash,
 {
     /// Interns the given value in this arena.
     ///
     /// If the value was already interned in this arena, its interning index
     /// will simply be returned. Otherwise it will be stored into the arena.
+    pub fn intern_owned(&self, value: Vec<T>) -> InternedSlice<T> {
+        #[cfg(feature = "debug")]
+        self.references.fetch_add(1, atomic::Ordering::Relaxed);
+
+        let hash = self.hasher.hash_one(&value);
+        let id = *self
+            .map
+            .entry(
+                hash,
+                |&i| self.lookup_slice(i) == value,
+                |&i| self.hasher.hash_one(self.lookup_slice(i)),
+            )
+            .or_insert_with(|| {
+                let range = self.vec.push_owned_slice(value);
+                assert!(range.start <= u32::MAX as usize);
+                assert!(range.end <= u32::MAX as usize);
+                let range = range.start as u32..range.end as u32;
+
+                let id = self.ranges.push(range.into());
+                assert!(id <= u32::MAX as usize);
+                id as u32
+            })
+            .get();
+        InternedSlice::new(id)
+    }
+
+    /// Interns the given value in this arena.
+    ///
+    /// If the value was already interned in this arena, its interning index
+    /// will simply be returned. Otherwise it will be stored into the arena.
+    pub fn intern_array<const N: usize>(&self, value: [T; N]) -> InternedSlice<T> {
+        #[cfg(feature = "debug")]
+        self.references.fetch_add(1, atomic::Ordering::Relaxed);
+
+        let hash = self.hasher.hash_one(&value);
+        let id = *self
+            .map
+            .entry(
+                hash,
+                |&i| self.lookup_slice(i) == value,
+                |&i| self.hasher.hash_one(self.lookup_slice(i)),
+            )
+            .or_insert_with(|| {
+                let range = self.vec.push_array(value);
+                assert!(range.start <= u32::MAX as usize);
+                assert!(range.end <= u32::MAX as usize);
+                let range = range.start as u32..range.end as u32;
+
+                let id = self.ranges.push(range.into());
+                assert!(id <= u32::MAX as usize);
+                id as u32
+            })
+            .get();
+        InternedSlice::new(id)
+    }
+
+    /// Unconditionally push a value, without validating that it's already
+    /// interned.
+    #[cfg(feature = "raw")]
+    pub fn push_owned_mut(&mut self, value: Vec<T>) -> InternedSlice<T> {
+        #[cfg(feature = "debug")]
+        self.references.fetch_add(1, atomic::Ordering::Relaxed);
+
+        let hash = self.hasher.hash_one(&value);
+
+        let range = self.vec.push_owned_slice_mut(value);
+        assert!(range.start <= u32::MAX as usize);
+        assert!(range.end <= u32::MAX as usize);
+        let range = range.start as u32..range.end as u32;
+
+        let id = self.ranges.push_mut(range.into());
+        assert!(id <= u32::MAX as usize);
+        let id = id as u32;
+
+        self.map
+            .insert_unique(hash, id, |&i| self.hasher.hash_one(self.lookup_slice(i)));
+        InternedSlice::new(id)
+    }
+
+    /// Unconditionally push a value, without validating that it's already
+    /// interned.
+    #[cfg(feature = "raw")]
+    pub fn push_array_mut<const N: usize>(&mut self, value: [T; N]) -> InternedSlice<T> {
+        #[cfg(feature = "debug")]
+        self.references.fetch_add(1, atomic::Ordering::Relaxed);
+
+        let hash = self.hasher.hash_one(&value);
+
+        let range = self.vec.push_array_mut(value);
+        assert!(range.start <= u32::MAX as usize);
+        assert!(range.end <= u32::MAX as usize);
+        let range = range.start as u32..range.end as u32;
+
+        let id = self.ranges.push_mut(range.into());
+        assert!(id <= u32::MAX as usize);
+        let id = id as u32;
+
+        self.map
+            .insert_unique(hash, id, |&i| self.hasher.hash_one(self.lookup_slice(i)));
+        InternedSlice::new(id)
+    }
+}
+
+impl<T> ArenaSlice<T>
+where
+    T: Default + Clone + Eq + Hash,
+{
+    /// Interns the given value in this arena.
+    ///
+    /// If the value was already interned in this arena, its interning index
+    /// will simply be returned. Otherwise it will be stored into the arena.
+    ///
+    /// If `T` is [`Copy`], it may be more efficient to call
+    /// [`intern_copy()`](Self::intern_copy) instead.
     pub fn intern(&self, value: &[T]) -> InternedSlice<T> {
         #[cfg(feature = "debug")]
         self.references.fetch_add(1, atomic::Ordering::Relaxed);
@@ -374,6 +476,16 @@ where
 
     /// Unconditionally push a value, without validating that it's already
     /// interned.
+    ///
+    /// If `T` is [`Copy`], calling [`push_copy_mut()`](Self::push_copy_mut) may
+    /// be more efficient.
+    #[cfg(feature = "raw")]
+    pub fn push_mut(&mut self, value: &[T]) -> u32 {
+        self.push(value)
+    }
+
+    /// Unconditionally push a value, without validating that it's already
+    /// interned.
     fn push(&mut self, value: &[T]) -> u32 {
         #[cfg(feature = "debug")]
         self.references.fetch_add(1, atomic::Ordering::Relaxed);
@@ -381,6 +493,72 @@ where
         let hash = self.hasher.hash_one(value);
 
         let range = self.vec.push_slice_mut(value);
+        assert!(range.start <= u32::MAX as usize);
+        assert!(range.end <= u32::MAX as usize);
+        let range = range.start as u32..range.end as u32;
+
+        let id = self.ranges.push_mut(range.into());
+        assert!(id <= u32::MAX as usize);
+        let id = id as u32;
+
+        self.map
+            .insert_unique(hash, id, |&i| self.hasher.hash_one(self.lookup_slice(i)));
+        id
+    }
+}
+
+impl<T> ArenaSlice<T>
+where
+    T: Default + Copy + Eq + Hash,
+{
+    /// Interns the given value in this arena.
+    ///
+    /// If the value was already interned in this arena, its interning index
+    /// will simply be returned. Otherwise it will be stored into the arena.
+    ///
+    /// If `T` is only [`Clone`], you can call [`intern()`](Self::intern)
+    /// instead. If `T` is also not [`Clone`], you can call
+    /// [`intern_owned()`](Self::intern_owned) or
+    /// [`intern_array()`](Self::intern_array).
+    pub fn intern_copy(&self, value: &[T]) -> InternedSlice<T> {
+        #[cfg(feature = "debug")]
+        self.references.fetch_add(1, atomic::Ordering::Relaxed);
+
+        let hash = self.hasher.hash_one(value);
+        let id = *self
+            .map
+            .entry(
+                hash,
+                |&i| self.lookup_slice(i) == value,
+                |&i| self.hasher.hash_one(self.lookup_slice(i)),
+            )
+            .or_insert_with(|| {
+                let range = self.vec.push_slice_copy(value);
+                assert!(range.start <= u32::MAX as usize);
+                assert!(range.end <= u32::MAX as usize);
+                let range = range.start as u32..range.end as u32;
+
+                let id = self.ranges.push(range.into());
+                assert!(id <= u32::MAX as usize);
+                id as u32
+            })
+            .get();
+        InternedSlice::new(id)
+    }
+
+    /// Unconditionally push a value, without validating that it's already
+    /// interned.
+    ///
+    /// If `T` is only [`Clone`], you can call [`push_mut()`](Self::push_mut)
+    /// instead.
+    #[cfg(feature = "raw")]
+    pub fn push_copy_mut(&mut self, value: &[T]) -> u32 {
+        #[cfg(feature = "debug")]
+        self.references.fetch_add(1, atomic::Ordering::Relaxed);
+
+        let hash = self.hasher.hash_one(value);
+
+        let range = self.vec.push_slice_copy_mut(value);
         assert!(range.start <= u32::MAX as usize);
         assert!(range.end <= u32::MAX as usize);
         let range = range.start as u32..range.end as u32;
@@ -501,7 +679,7 @@ where
 #[cfg(feature = "serde")]
 impl<'de, T> Deserialize<'de> for ArenaSlice<T>
 where
-    T: Default + Copy + Eq + Hash + Deserialize<'de>,
+    T: Default + Clone + Eq + Hash + Deserialize<'de>,
 {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -528,7 +706,7 @@ impl<T> ArenaSliceVisitor<T> {
 #[cfg(feature = "serde")]
 impl<'de, T> Visitor<'de> for ArenaSliceVisitor<T>
 where
-    T: Default + Copy + Eq + Hash + Deserialize<'de>,
+    T: Default + Clone + Eq + Hash + Deserialize<'de>,
 {
     type Value = ArenaSlice<T>;
 
