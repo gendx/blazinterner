@@ -105,7 +105,7 @@ impl<T> InternedSlice<T> {
     /// Creates an interned value for the given index.
     ///
     /// This is a low-level function. You should instead use the
-    /// [`from()`](Self::from) API to intern a value, unless you really know
+    /// [`ArenaSlice::intern()`] API to intern a value, unless you really know
     /// what you're doing.
     pub fn from_id(id: u32) -> Self {
         Self::new(id)
@@ -114,8 +114,7 @@ impl<T> InternedSlice<T> {
     /// Obtains the underlying interning index.
     ///
     /// This is a low-level function. You should instead use the
-    /// [`lookup()`](Self::lookup) API, unless you really know what you're
-    /// doing.
+    /// [`ArenaSlice::lookup()`] API, unless you really know what you're doing.
     pub fn id(&self) -> u32 {
         self.id
     }

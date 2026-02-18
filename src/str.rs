@@ -34,7 +34,7 @@ impl InternedStr {
     /// Creates an interned value for the given index.
     ///
     /// This is a low-level function. You should instead use the
-    /// [`from()`](Self::from) API to intern a value, unless you really know
+    /// [`ArenaStr::intern()`] API to intern a value, unless you really know
     /// what you're doing.
     pub fn from_id(id: u32) -> Self {
         Self::new(id)
@@ -43,8 +43,8 @@ impl InternedStr {
     /// Obtains the underlying interning index.
     ///
     /// This is a low-level function. You should instead use the
-    /// [`lookup()`](Self::lookup) API, unless you really know what you're
-    /// doing.
+    /// [`ArenaStr::lookup()`] and [`ArenaStr::lookup_bytes()`] APIs, unless you
+    /// really know what you're doing.
     pub fn id(&self) -> u32 {
         self.0
     }

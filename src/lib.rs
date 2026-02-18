@@ -6,9 +6,9 @@
 //!
 //! - **Generic**: You can intern any data type that implements [`Hash`] and
 //!   [`Eq`], not just strings. The interned type doesn't even have to be
-//!   [`Sized`] (for example [`str`]), as long as you provide a [`Sized`]
-//!   storage type (such as `Box<str>`) that can be borrowed as the interned
-//!   type.
+//!   [`Sized`] (for example [`str`](prim@str)), as long as you provide a
+//!   [`Sized`] storage type (such as `Box<str>`) that can be borrowed as the
+//!   interned type.
 //! - **Efficient**: Each [`Interned`] value contains only a 32-bit index. The
 //!   corresponding [`Arena`] stores each value directly in an [`AppendVec`],
 //!   plus the 32-bit index in a raw hash table ([`DashTable`]). To intern a
@@ -18,12 +18,11 @@
 //!   can intern many string types: `&str`, `String`, `Box<str>`, `Cow<'_,
 //!   str>`, etc.
 //! - **Concurrent**: The [`Arena`] is [`Sync`], and allows simultaneous reads
-//!   and writes. More specifically, retrieving values via
-//!   [`Interned::lookup()`] and [`Interned::lookup_ref()`] is always wait-free,
-//!   even when a write happens concurrently! This is thanks to the underlying
-//!   [`AppendVec`] implementation. However, only one write (using
-//!   [`Interned::from()`]) can happen at a time on a given arena, due to an
-//!   exclusive write lock.
+//!   and writes. More specifically, retrieving values via [`Arena::lookup()`]
+//!   and [`Arena::lookup_ref()`] is always wait-free, even when a write happens
+//!   concurrently! This is thanks to the underlying [`AppendVec`]
+//!   implementation. However, only one write (using [`Arena::intern()`]) can
+//!   happen at a time on a given arena, due to an exclusive write lock.
 
 #![forbid(missing_docs, unsafe_code)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
@@ -62,7 +61,8 @@ pub use str::{ArenaStr, InternedStr};
 /// This is generic over the logical value type `T` as well as its `Storage`
 /// type, that needs to be [`Sized`]. For [`Sized`] values, `Storage = T` is a
 /// good default that incurs no overhead. For non-[`Sized`] values such as
-/// [`str`], you need to specify a [`Sized`] storage type, such as `Box<T>`.
+/// [`str`](prim@str), you need to specify a [`Sized`] storage type, such as
+/// `Box<T>`.
 pub struct Interned<T: ?Sized, Storage = T> {
     id: u32,
     _phantom: PhantomData<fn() -> (*const T, *const Storage)>,
@@ -122,8 +122,8 @@ impl<T: ?Sized, Storage> Interned<T, Storage> {
     /// Creates an interned value for the given index.
     ///
     /// This is a low-level function. You should instead use the
-    /// [`from()`](Self::from) API to intern a value, unless you really know
-    /// what you're doing.
+    /// [`Arena::intern()`] API to intern a value, unless you really know what
+    /// you're doing.
     pub fn from_id(id: u32) -> Self {
         Self::new(id)
     }
@@ -131,8 +131,8 @@ impl<T: ?Sized, Storage> Interned<T, Storage> {
     /// Obtains the underlying interning index.
     ///
     /// This is a low-level function. You should instead use the
-    /// [`lookup()`](Self::lookup) and [`lookup_ref()`](Self::lookup_ref) APIs,
-    /// unless you really know what you're doing.
+    /// [`Arena::lookup()`] and [`Arena::lookup_ref()`] APIs, unless you really
+    /// know what you're doing.
     pub fn id(&self) -> u32 {
         self.id
     }
@@ -253,8 +253,8 @@ impl Visitor<'_> for U32Visitor {
 /// `Storage` type (that needs to be [`Sized`]).
 ///
 /// For [`Sized`] values, `Storage = T` is a good default that incurs no
-/// overhead. For non-[`Sized`] values such as [`str`], you need to specify a
-/// [`Sized`] storage type, such as `Box<T>`.
+/// overhead. For non-[`Sized`] values such as [`str`](prim@str), you need to
+/// specify a [`Sized`] storage type, such as `Box<T>`.
 pub struct Arena<T: ?Sized, Storage = T> {
     vec: AppendVec<Storage>,
     map: DashTable<u32>,
