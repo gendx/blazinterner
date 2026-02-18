@@ -434,6 +434,38 @@ where
             .insert_unique(hash, id, |&i| self.hasher.hash_one(self.lookup_slice(i)));
         InternedSlice::new(id)
     }
+
+    /// Unconditionally push an iterator as a single contiguous value, without
+    /// validating that it's already interned.
+    ///
+    /// # Safety
+    ///
+    /// This function requires the iterator length to be correct. This is akin
+    /// to the nightly-only [`TrustedLen`](std::iter::TrustedLen) trait.
+    #[cfg(feature = "raw")]
+    pub unsafe fn push_iter_mut(
+        &mut self,
+        value: impl ExactSizeIterator<Item = T>,
+    ) -> InternedSlice<T> {
+        #[cfg(feature = "debug")]
+        self.references.fetch_add(1, atomic::Ordering::Relaxed);
+
+        // SAFETY: The caller ensures that the iterator length is correct.
+        let range = unsafe { self.vec.push_contiguous_mut(value) };
+        assert!(range.start <= u32::MAX as usize);
+        assert!(range.end <= u32::MAX as usize);
+        let range32 = range.start as u32..range.end as u32;
+
+        let id = self.ranges.push_mut(range32.into());
+        assert!(id <= u32::MAX as usize);
+        let id = id as u32;
+
+        let hash = self.hasher.hash_one(&self.vec[range]);
+
+        self.map
+            .insert_unique(hash, id, |&i| self.hasher.hash_one(self.lookup_slice(i)));
+        InternedSlice::new(id)
+    }
 }
 
 impl<T> ArenaSlice<T>

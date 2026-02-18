@@ -24,7 +24,7 @@ raw = []
 serde = ["dep:serde", "dep:serde_tuple"]
 
 [dependencies]
-appendvec = "0.1.4"
+appendvec = "0.1.5"
 dashtable = "0.1.1"
 get-size2 = { optional = true, version = "0.7.4", features = ["derive"] }
 hashbrown = "0.16.1"

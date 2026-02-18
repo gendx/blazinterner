@@ -24,7 +24,13 @@
 //!   implementation. However, only one write (using [`Arena::intern()`]) can
 //!   happen at a time on a given arena, due to an exclusive write lock.
 
-#![forbid(missing_docs, unsafe_code)]
+#![forbid(
+    missing_docs,
+    unsafe_op_in_unsafe_fn,
+    clippy::missing_safety_doc,
+    clippy::multiple_unsafe_ops_per_block,
+    clippy::undocumented_unsafe_blocks
+)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
 #[cfg(feature = "delta")]
