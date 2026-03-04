@@ -153,10 +153,48 @@ impl<'de, T> Deserialize<'de> for InternedSlice<T> {
     }
 }
 
-/// Interning arena for slices of type `T`.
-pub struct ArenaSlice<T> {
+struct RangeVec<T> {
     vec: AppendVec<T>,
     ranges: AppendVec<CopyRangeU32>,
+}
+
+impl<T> RangeVec<T> {
+    fn lookup_slice(&self, id: u32) -> &[T] {
+        let range = self.ranges[id as usize];
+        let range = range.start as usize..range.end as usize;
+        &self.vec[range]
+    }
+
+    fn iter(&self) -> impl Iterator<Item = &[T]> {
+        self.ranges
+            .iter()
+            .map(|&range| &self.vec[range.start as usize..range.end as usize])
+    }
+
+    fn push_range(&self, range: Range<usize>) -> u32 {
+        assert!(range.start <= u32::MAX as usize);
+        assert!(range.end <= u32::MAX as usize);
+        let range = range.start as u32..range.end as u32;
+
+        let id = self.ranges.push(range.into());
+        assert!(id <= u32::MAX as usize);
+        id as u32
+    }
+
+    fn push_range_mut(&mut self, range: Range<usize>) -> u32 {
+        assert!(range.start <= u32::MAX as usize);
+        assert!(range.end <= u32::MAX as usize);
+        let range = range.start as u32..range.end as u32;
+
+        let id = self.ranges.push_mut(range.into());
+        assert!(id <= u32::MAX as usize);
+        id as u32
+    }
+}
+
+/// Interning arena for slices of type `T`.
+pub struct ArenaSlice<T> {
+    rangevec: RangeVec<T>,
     map: DashTable<u32>,
     hasher: DefaultHashBuilder,
     #[cfg(feature = "debug")]
@@ -181,8 +219,10 @@ impl<T> ArenaSlice<T> {
     /// number of slices, totalling the given number of items of type `T`.
     pub fn with_capacity(slices: usize, items: usize) -> Self {
         Self {
-            vec: AppendVec::with_capacity(items),
-            ranges: AppendVec::with_capacity(slices),
+            rangevec: RangeVec {
+                vec: AppendVec::with_capacity(items),
+                ranges: AppendVec::with_capacity(slices),
+            },
             map: DashTable::with_capacity(slices),
             hasher: DefaultHashBuilder::default(),
             #[cfg(feature = "debug")]
@@ -196,7 +236,7 @@ impl<T> ArenaSlice<T> {
     /// only a snapshot as viewed by this thread, and the result may change
     /// if other threads are inserting values.
     pub fn slices(&self) -> usize {
-        self.ranges.len()
+        self.rangevec.ranges.len()
     }
 
     /// Returns the total number of items of type `T` in this arena.
@@ -205,7 +245,7 @@ impl<T> ArenaSlice<T> {
     /// only a snapshot as viewed by this thread, and the result may change
     /// if other threads are inserting values.
     pub fn items(&self) -> usize {
-        self.vec.len()
+        self.rangevec.vec.len()
     }
 
     /// Checks if this arena is empty.
@@ -240,17 +280,17 @@ where
 
 impl<T> ArenaSlice<T> {
     fn iter(&self) -> impl Iterator<Item = &[T]> {
-        self.ranges
-            .iter()
-            .map(|&range| &self.vec[range.start as usize..range.end as usize])
+        self.rangevec.iter()
     }
 }
 
 impl<T> Default for ArenaSlice<T> {
     fn default() -> Self {
         Self {
-            vec: AppendVec::new(),
-            ranges: AppendVec::new(),
+            rangevec: RangeVec {
+                vec: AppendVec::new(),
+                ranges: AppendVec::new(),
+            },
             map: DashTable::new(),
             hasher: DefaultHashBuilder::default(),
             #[cfg(feature = "debug")]
@@ -285,8 +325,13 @@ where
     T: GetSize,
 {
     fn get_heap_size_with_tracker<Tr: GetSizeTracker>(&self, tracker: Tr) -> (usize, Tr) {
-        let heap_size = self.vec.iter().map(|x| x.get_size()).sum::<usize>()
-            + self.ranges.len() * (size_of::<CopyRangeU32>() + size_of::<u32>());
+        let heap_size = self
+            .rangevec
+            .vec
+            .iter()
+            .map(|x| x.get_size())
+            .sum::<usize>()
+            + self.rangevec.ranges.len() * (size_of::<CopyRangeU32>() + size_of::<u32>());
         (heap_size, tracker)
     }
 }
@@ -298,8 +343,8 @@ where
 {
     /// Prints a summary of the storage used by this arena to stdout.
     pub fn print_summary(&self, prefix: &str, title: &str, total_bytes: usize) {
-        let slices = self.ranges.len();
-        let items = self.vec.len();
+        let slices = self.rangevec.ranges.len();
+        let items = self.rangevec.vec.len();
         let references = self.references();
         let estimated_bytes = self.get_size();
         println!(
@@ -346,14 +391,8 @@ where
                 |&i| self.hasher.hash_one(self.lookup_slice(i)),
             )
             .or_insert_with(|| {
-                let range = self.vec.push_owned_slice(value);
-                assert!(range.start <= u32::MAX as usize);
-                assert!(range.end <= u32::MAX as usize);
-                let range = range.start as u32..range.end as u32;
-
-                let id = self.ranges.push(range.into());
-                assert!(id <= u32::MAX as usize);
-                id as u32
+                let range = self.rangevec.vec.push_owned_slice(value);
+                self.rangevec.push_range(range)
             })
             .get();
         InternedSlice::new(id)
@@ -376,14 +415,8 @@ where
                 |&i| self.hasher.hash_one(self.lookup_slice(i)),
             )
             .or_insert_with(|| {
-                let range = self.vec.push_array(value);
-                assert!(range.start <= u32::MAX as usize);
-                assert!(range.end <= u32::MAX as usize);
-                let range = range.start as u32..range.end as u32;
-
-                let id = self.ranges.push(range.into());
-                assert!(id <= u32::MAX as usize);
-                id as u32
+                let range = self.rangevec.vec.push_array(value);
+                self.rangevec.push_range(range)
             })
             .get();
         InternedSlice::new(id)
@@ -398,17 +431,12 @@ where
 
         let hash = self.hasher.hash_one(&value);
 
-        let range = self.vec.push_owned_slice_mut(value);
-        assert!(range.start <= u32::MAX as usize);
-        assert!(range.end <= u32::MAX as usize);
-        let range = range.start as u32..range.end as u32;
+        let range = self.rangevec.vec.push_owned_slice_mut(value);
+        let id = self.rangevec.push_range_mut(range);
 
-        let id = self.ranges.push_mut(range.into());
-        assert!(id <= u32::MAX as usize);
-        let id = id as u32;
-
-        self.map
-            .insert_unique(hash, id, |&i| self.hasher.hash_one(self.lookup_slice(i)));
+        self.map.insert_unique_mut(hash, id, |&i| {
+            self.hasher.hash_one(self.rangevec.lookup_slice(i))
+        });
         InternedSlice::new(id)
     }
 
@@ -421,17 +449,12 @@ where
 
         let hash = self.hasher.hash_one(&value);
 
-        let range = self.vec.push_array_mut(value);
-        assert!(range.start <= u32::MAX as usize);
-        assert!(range.end <= u32::MAX as usize);
-        let range = range.start as u32..range.end as u32;
+        let range = self.rangevec.vec.push_array_mut(value);
+        let id = self.rangevec.push_range_mut(range);
 
-        let id = self.ranges.push_mut(range.into());
-        assert!(id <= u32::MAX as usize);
-        let id = id as u32;
-
-        self.map
-            .insert_unique(hash, id, |&i| self.hasher.hash_one(self.lookup_slice(i)));
+        self.map.insert_unique_mut(hash, id, |&i| {
+            self.hasher.hash_one(self.rangevec.lookup_slice(i))
+        });
         InternedSlice::new(id)
     }
 
@@ -451,19 +474,14 @@ where
         self.references.fetch_add(1, atomic::Ordering::Relaxed);
 
         // SAFETY: The caller ensures that the iterator length is correct.
-        let range = unsafe { self.vec.push_contiguous_mut(value) };
-        assert!(range.start <= u32::MAX as usize);
-        assert!(range.end <= u32::MAX as usize);
-        let range32 = range.start as u32..range.end as u32;
+        let range = unsafe { self.rangevec.vec.push_contiguous_mut(value) };
+        let id = self.rangevec.push_range_mut(range.clone());
 
-        let id = self.ranges.push_mut(range32.into());
-        assert!(id <= u32::MAX as usize);
-        let id = id as u32;
+        let hash = self.hasher.hash_one(&self.rangevec.vec[range]);
 
-        let hash = self.hasher.hash_one(&self.vec[range]);
-
-        self.map
-            .insert_unique(hash, id, |&i| self.hasher.hash_one(self.lookup_slice(i)));
+        self.map.insert_unique_mut(hash, id, |&i| {
+            self.hasher.hash_one(self.rangevec.lookup_slice(i))
+        });
         InternedSlice::new(id)
     }
 }
@@ -492,14 +510,8 @@ where
                 |&i| self.hasher.hash_one(self.lookup_slice(i)),
             )
             .or_insert_with(|| {
-                let range = self.vec.push_slice(value);
-                assert!(range.start <= u32::MAX as usize);
-                assert!(range.end <= u32::MAX as usize);
-                let range = range.start as u32..range.end as u32;
-
-                let id = self.ranges.push(range.into());
-                assert!(id <= u32::MAX as usize);
-                id as u32
+                let range = self.rangevec.vec.push_slice(value);
+                self.rangevec.push_range(range)
             })
             .get();
         InternedSlice::new(id)
@@ -523,17 +535,12 @@ where
 
         let hash = self.hasher.hash_one(value);
 
-        let range = self.vec.push_slice_mut(value);
-        assert!(range.start <= u32::MAX as usize);
-        assert!(range.end <= u32::MAX as usize);
-        let range = range.start as u32..range.end as u32;
+        let range = self.rangevec.vec.push_slice_mut(value);
+        let id = self.rangevec.push_range_mut(range);
 
-        let id = self.ranges.push_mut(range.into());
-        assert!(id <= u32::MAX as usize);
-        let id = id as u32;
-
-        self.map
-            .insert_unique(hash, id, |&i| self.hasher.hash_one(self.lookup_slice(i)));
+        self.map.insert_unique_mut(hash, id, |&i| {
+            self.hasher.hash_one(self.rangevec.lookup_slice(i))
+        });
         id
     }
 }
@@ -564,14 +571,8 @@ where
                 |&i| self.hasher.hash_one(self.lookup_slice(i)),
             )
             .or_insert_with(|| {
-                let range = self.vec.push_slice_copy(value);
-                assert!(range.start <= u32::MAX as usize);
-                assert!(range.end <= u32::MAX as usize);
-                let range = range.start as u32..range.end as u32;
-
-                let id = self.ranges.push(range.into());
-                assert!(id <= u32::MAX as usize);
-                id as u32
+                let range = self.rangevec.vec.push_slice_copy(value);
+                self.rangevec.push_range(range)
             })
             .get();
         InternedSlice::new(id)
@@ -589,17 +590,12 @@ where
 
         let hash = self.hasher.hash_one(value);
 
-        let range = self.vec.push_slice_copy_mut(value);
-        assert!(range.start <= u32::MAX as usize);
-        assert!(range.end <= u32::MAX as usize);
-        let range = range.start as u32..range.end as u32;
+        let range = self.rangevec.vec.push_slice_copy_mut(value);
+        let id = self.rangevec.push_range_mut(range);
 
-        let id = self.ranges.push_mut(range.into());
-        assert!(id <= u32::MAX as usize);
-        let id = id as u32;
-
-        self.map
-            .insert_unique(hash, id, |&i| self.hasher.hash_one(self.lookup_slice(i)));
+        self.map.insert_unique_mut(hash, id, |&i| {
+            self.hasher.hash_one(self.rangevec.lookup_slice(i))
+        });
         id
     }
 }
@@ -615,9 +611,7 @@ impl<T> ArenaSlice<T> {
     }
 
     fn lookup_slice(&self, id: u32) -> &[T] {
-        let range = self.ranges[id as usize];
-        let range = range.start as usize..range.end as usize;
-        &self.vec[range]
+        self.rangevec.lookup_slice(id)
     }
 }
 
@@ -633,7 +627,7 @@ where
         let mut tuple = serializer.serialize_tuple(2)?;
 
         let ranges = RangeWrapper {
-            ranges: &self.ranges,
+            ranges: &self.rangevec.ranges,
             ranges_len: Cell::new(0),
             total_len: Cell::new(0),
         };
@@ -642,7 +636,7 @@ where
         tuple.serialize_element(&ArenaSliceWrapper {
             ranges_len: ranges.ranges_len.into_inner(),
             total_len: ranges.total_len.into_inner(),
-            arena: self,
+            rangevec: &self.rangevec,
         })?;
 
         tuple.end()
@@ -682,7 +676,7 @@ impl<'a> Serialize for RangeWrapper<'a> {
 struct ArenaSliceWrapper<'a, T> {
     ranges_len: u32,
     total_len: u32,
-    arena: &'a ArenaSlice<T>,
+    rangevec: &'a RangeVec<T>,
 }
 
 #[cfg(feature = "serde")]
@@ -696,8 +690,8 @@ where
     {
         let mut seq = serializer.serialize_seq(Some(self.total_len as usize))?;
 
-        for range in self.arena.ranges.iter().take(self.ranges_len as usize) {
-            let slice = &self.arena.vec[range.start as usize..range.end as usize];
+        for range in self.rangevec.ranges.iter().take(self.ranges_len as usize) {
+            let slice = &self.rangevec.vec[range.start as usize..range.end as usize];
             for t in slice {
                 seq.serialize_element(t)?;
             }
@@ -757,8 +751,10 @@ where
             .ok_or_else(|| A::Error::invalid_length(1, &self))?;
 
         let mut arena = ArenaSlice {
-            vec: AppendVec::with_capacity(values.len()),
-            ranges: AppendVec::with_capacity(sizes.len()),
+            rangevec: RangeVec {
+                vec: AppendVec::with_capacity(values.len()),
+                ranges: AppendVec::with_capacity(sizes.len()),
+            },
             map: DashTable::with_capacity(sizes.len()),
             hasher: DefaultHashBuilder::default(),
             #[cfg(feature = "debug")]
@@ -793,7 +789,7 @@ mod delta {
             let mut tuple = serializer.serialize_tuple(2)?;
 
             let ranges = RangeWrapper {
-                ranges: &self.ranges,
+                ranges: &self.rangevec.ranges,
                 ranges_len: Cell::new(0),
                 total_len: Cell::new(0),
             };
@@ -802,7 +798,7 @@ mod delta {
             tuple.serialize_element(&ArenaSliceWrapper {
                 ranges_len: ranges.ranges_len.into_inner(),
                 total_len: ranges.total_len.into_inner(),
-                arena: self,
+                rangevec: &self.map_ref(|arena| &arena.rangevec),
             })?;
 
             tuple.end()
@@ -812,7 +808,7 @@ mod delta {
     struct ArenaSliceWrapper<'a, T, Accum> {
         ranges_len: u32,
         total_len: u32,
-        arena: &'a DeltaEncoding<&'a ArenaSlice<T>, Accum>,
+        rangevec: &'a DeltaEncoding<&'a RangeVec<T>, Accum>,
     }
 
     impl<'a, T, Delta, Accum> Serialize for ArenaSliceWrapper<'a, T, Accum>
@@ -827,8 +823,8 @@ mod delta {
             let mut seq = serializer.serialize_seq(Some(self.total_len as usize))?;
 
             let mut acc = Accum::default();
-            for range in self.arena.ranges.iter().take(self.ranges_len as usize) {
-                let slice = &self.arena.vec[range.start as usize..range.end as usize];
+            for range in self.rangevec.ranges.iter().take(self.ranges_len as usize) {
+                let slice = &self.rangevec.vec[range.start as usize..range.end as usize];
                 let delta = acc.fold(slice);
                 assert_eq!(
                     delta.len(),
@@ -896,8 +892,10 @@ mod delta {
                 .ok_or_else(|| A::Error::invalid_length(1, &self))?;
 
             let mut arena = ArenaSlice {
-                vec: AppendVec::with_capacity(values.len()),
-                ranges: AppendVec::with_capacity(sizes.len()),
+                rangevec: RangeVec {
+                    vec: AppendVec::with_capacity(values.len()),
+                    ranges: AppendVec::with_capacity(sizes.len()),
+                },
                 map: DashTable::with_capacity(sizes.len()),
                 hasher: DefaultHashBuilder::default(),
                 #[cfg(feature = "debug")]

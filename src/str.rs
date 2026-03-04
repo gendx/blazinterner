@@ -56,10 +56,62 @@ impl InternedStr {
     }
 }
 
-/// Interning arena for strings.
-pub struct ArenaStr {
+struct RangeVecStr {
     vec: AppendStr,
     ranges: AppendVec<CopyRangeU32>,
+}
+
+impl RangeVecStr {
+    fn lookup_bytes(&self, id: u32) -> &[u8] {
+        let range = self.ranges[id as usize];
+        let range = range.start as usize..range.end as usize;
+        self.vec.get_bytes(range)
+    }
+
+    fn lookup_str(&self, id: u32) -> &str {
+        let range = self.ranges[id as usize];
+        let range = range.start as usize..range.end as usize;
+        &self.vec[range]
+    }
+
+    fn iter(&self) -> impl Iterator<Item = &str> {
+        self.ranges
+            .iter()
+            .map(|&range| &self.vec[range.start as usize..range.end as usize])
+    }
+
+    fn iter_bytes(&self) -> impl Iterator<Item = &[u8]> {
+        self.ranges
+            .iter()
+            .map(|&range| self.vec.get_bytes(range.start as usize..range.end as usize))
+    }
+
+    fn push_str(&self, value: &str) -> u32 {
+        let range = self.vec.push_str(value);
+        assert!(range.start <= u32::MAX as usize);
+        assert!(range.end <= u32::MAX as usize);
+        let range = range.start as u32..range.end as u32;
+
+        let id = self.ranges.push(range.into());
+        assert!(id <= u32::MAX as usize);
+        id as u32
+    }
+
+    fn push_str_mut(&mut self, value: &str) -> u32 {
+        let range = self.vec.push_str_mut(value);
+        assert!(range.start <= u32::MAX as usize);
+        assert!(range.end <= u32::MAX as usize);
+        let range = range.start as u32..range.end as u32;
+
+        let id = self.ranges.push_mut(range.into());
+        assert!(id <= u32::MAX as usize);
+        id as u32
+    }
+}
+
+/// Interning arena for strings.
+pub struct ArenaStr {
+    rangevec: RangeVecStr,
     map: DashTable<u32>,
     hasher: DefaultHashBuilder,
     #[cfg(feature = "debug")]
@@ -81,8 +133,10 @@ impl ArenaStr {
     /// number of strings, totalling the given number of bytes.
     pub fn with_capacity(strings: usize, bytes: usize) -> Self {
         Self {
-            vec: AppendStr::with_capacity(bytes),
-            ranges: AppendVec::with_capacity(strings),
+            rangevec: RangeVecStr {
+                vec: AppendStr::with_capacity(bytes),
+                ranges: AppendVec::with_capacity(strings),
+            },
             map: DashTable::with_capacity(strings),
             hasher: DefaultHashBuilder::default(),
             #[cfg(feature = "debug")]
@@ -96,7 +150,7 @@ impl ArenaStr {
     /// only a snapshot as viewed by this thread, and the result may change
     /// if other threads are inserting values.
     pub fn strings(&self) -> usize {
-        self.ranges.len()
+        self.rangevec.ranges.len()
     }
 
     /// Returns the total number of bytes in this arena.
@@ -105,7 +159,7 @@ impl ArenaStr {
     /// only a snapshot as viewed by this thread, and the result may change
     /// if other threads are inserting values.
     pub fn bytes(&self) -> usize {
-        self.vec.len()
+        self.rangevec.vec.len()
     }
 
     /// Checks if this arena is empty.
@@ -138,23 +192,21 @@ impl ArenaStr {
 
 impl ArenaStr {
     fn iter(&self) -> impl Iterator<Item = &str> {
-        self.ranges
-            .iter()
-            .map(|&range| &self.vec[range.start as usize..range.end as usize])
+        self.rangevec.iter()
     }
 
     fn iter_bytes(&self) -> impl Iterator<Item = &[u8]> {
-        self.ranges
-            .iter()
-            .map(|&range| self.vec.get_bytes(range.start as usize..range.end as usize))
+        self.rangevec.iter_bytes()
     }
 }
 
 impl Default for ArenaStr {
     fn default() -> Self {
         Self {
-            vec: AppendStr::new(),
-            ranges: AppendVec::new(),
+            rangevec: RangeVecStr {
+                vec: AppendStr::new(),
+                ranges: AppendVec::new(),
+            },
             map: DashTable::new(),
             hasher: DefaultHashBuilder::default(),
             #[cfg(feature = "debug")]
@@ -180,8 +232,8 @@ impl Eq for ArenaStr {}
 #[cfg(feature = "get-size2")]
 impl GetSize for ArenaStr {
     fn get_heap_size_with_tracker<Tr: GetSizeTracker>(&self, tracker: Tr) -> (usize, Tr) {
-        let heap_size = self.vec.len() * size_of::<u8>()
-            + self.ranges.len() * (size_of::<CopyRangeU32>() + size_of::<u32>());
+        let heap_size = self.rangevec.vec.len() * size_of::<u8>()
+            + self.rangevec.ranges.len() * (size_of::<CopyRangeU32>() + size_of::<u32>());
         (heap_size, tracker)
     }
 }
@@ -190,7 +242,7 @@ impl GetSize for ArenaStr {
 impl ArenaStr {
     /// Prints a summary of the storage used by this arena to stdout.
     pub fn print_summary(&self, prefix: &str, title: &str, total_bytes: usize) {
-        let strings = self.ranges.len();
+        let strings = self.rangevec.ranges.len();
         let references = self.references();
         let estimated_bytes = self.get_size();
         println!(
@@ -228,16 +280,7 @@ impl ArenaStr {
                 |&i| self.lookup_str(i) == value,
                 |&i| self.hasher.hash_one(self.lookup_str(i)),
             )
-            .or_insert_with(|| {
-                let range = self.vec.push_str(value);
-                assert!(range.start <= u32::MAX as usize);
-                assert!(range.end <= u32::MAX as usize);
-                let range = range.start as u32..range.end as u32;
-
-                let id = self.ranges.push(range.into());
-                assert!(id <= u32::MAX as usize);
-                id as u32
-            })
+            .or_insert_with(|| self.rangevec.push_str(value))
             .get();
         InternedStr::new(id)
     }
@@ -249,18 +292,10 @@ impl ArenaStr {
         self.references.fetch_add(1, atomic::Ordering::Relaxed);
 
         let hash = self.hasher.hash_one(value);
-
-        let range = self.vec.push_str_mut(value);
-        assert!(range.start <= u32::MAX as usize);
-        assert!(range.end <= u32::MAX as usize);
-        let range = range.start as u32..range.end as u32;
-
-        let id = self.ranges.push_mut(range.into());
-        assert!(id <= u32::MAX as usize);
-        let id = id as u32;
-
-        self.map
-            .insert_unique(hash, id, |&i| self.hasher.hash_one(self.lookup_str(i)));
+        let id = self.rangevec.push_str_mut(value);
+        self.map.insert_unique_mut(hash, id, |&i| {
+            self.hasher.hash_one(self.rangevec.lookup_str(i))
+        });
         id
     }
 
@@ -282,15 +317,11 @@ impl ArenaStr {
     /// intern this value, otherwise an arbitrary value will be returned or
     /// a panic will happen.
     pub fn lookup_bytes(&self, interned: InternedStr) -> &[u8] {
-        let range = self.ranges[interned.0 as usize];
-        let range = range.start as usize..range.end as usize;
-        self.vec.get_bytes(range)
+        self.rangevec.lookup_bytes(interned.0)
     }
 
     fn lookup_str(&self, id: u32) -> &str {
-        let range = self.ranges[id as usize];
-        let range = range.start as usize..range.end as usize;
-        &self.vec[range]
+        self.rangevec.lookup_str(id)
     }
 }
 
@@ -303,7 +334,7 @@ impl Serialize for ArenaStr {
         let mut tuple = serializer.serialize_tuple(2)?;
 
         let ranges = RangeWrapper {
-            ranges: &self.ranges,
+            ranges: &self.rangevec.ranges,
             ranges_len: Cell::new(0),
             total_len: Cell::new(0),
         };
@@ -312,7 +343,7 @@ impl Serialize for ArenaStr {
         tuple.serialize_element(&ArenaStrWrapper {
             ranges_len: ranges.ranges_len.into_inner(),
             total_len: ranges.total_len.into_inner(),
-            arena: self,
+            rangevec: &self.rangevec,
         })?;
 
         tuple.end()
@@ -352,7 +383,7 @@ impl<'a> Serialize for RangeWrapper<'a> {
 struct ArenaStrWrapper<'a> {
     ranges_len: u32,
     total_len: u32,
-    arena: &'a ArenaStr,
+    rangevec: &'a RangeVecStr,
 }
 
 #[cfg(feature = "serde")]
@@ -363,8 +394,8 @@ impl<'a> Serialize for ArenaStrWrapper<'a> {
     {
         // TODO: Make this zero-copy?
         let mut string = String::with_capacity(self.total_len as usize);
-        for range in self.arena.ranges.iter().take(self.ranges_len as usize) {
-            let s = &self.arena.vec[range.start as usize..range.end as usize];
+        for range in self.rangevec.ranges.iter().take(self.ranges_len as usize) {
+            let s = &self.rangevec.vec[range.start as usize..range.end as usize];
             string.push_str(s);
         }
 
@@ -405,8 +436,10 @@ impl<'de> Visitor<'de> for ArenaStrVisitor {
             .ok_or_else(|| A::Error::invalid_length(1, &self))?;
 
         let mut arena = ArenaStr {
-            vec: AppendStr::with_capacity(string.len()),
-            ranges: AppendVec::with_capacity(sizes.len()),
+            rangevec: RangeVecStr {
+                vec: AppendStr::with_capacity(string.len()),
+                ranges: AppendVec::with_capacity(sizes.len()),
+            },
             map: DashTable::with_capacity(sizes.len()),
             hasher: DefaultHashBuilder::default(),
             #[cfg(feature = "debug")]
@@ -442,7 +475,7 @@ mod delta {
             let mut tuple = serializer.serialize_tuple(2)?;
 
             let ranges = RangeWrapper {
-                ranges: &self.ranges,
+                ranges: &self.rangevec.ranges,
                 ranges_len: Cell::new(0),
                 total_len: Cell::new(0),
             };
@@ -451,7 +484,7 @@ mod delta {
             tuple.serialize_element(&ArenaStrWrapper {
                 ranges_len: ranges.ranges_len.into_inner(),
                 total_len: ranges.total_len.into_inner(),
-                arena: self,
+                rangevec: &self.map_ref(|arena| &arena.rangevec),
             })?;
 
             tuple.end()
@@ -461,7 +494,7 @@ mod delta {
     struct ArenaStrWrapper<'a, Accum> {
         ranges_len: u32,
         total_len: u32,
-        arena: &'a DeltaEncoding<&'a ArenaStr, Accum>,
+        rangevec: &'a DeltaEncoding<&'a RangeVecStr, Accum>,
     }
 
     impl<'a, Accum> Serialize for ArenaStrWrapper<'a, Accum>
@@ -475,8 +508,8 @@ mod delta {
             let mut seq = serializer.serialize_seq(Some(self.total_len as usize))?;
 
             let mut acc = Accum::default();
-            for range in self.arena.ranges.iter().take(self.ranges_len as usize) {
-                let slice = &self.arena.vec[range.start as usize..range.end as usize];
+            for range in self.rangevec.ranges.iter().take(self.ranges_len as usize) {
+                let slice = &self.rangevec.vec[range.start as usize..range.end as usize];
                 let delta = acc.fold(slice);
                 assert_eq!(
                     delta.len(),
@@ -538,8 +571,10 @@ mod delta {
                 .ok_or_else(|| A::Error::invalid_length(1, &self))?;
 
             let mut arena = ArenaStr {
-                vec: AppendStr::with_capacity(bytes.len()),
-                ranges: AppendVec::with_capacity(sizes.len()),
+                rangevec: RangeVecStr {
+                    vec: AppendStr::with_capacity(bytes.len()),
+                    ranges: AppendVec::with_capacity(sizes.len()),
+                },
                 map: DashTable::with_capacity(sizes.len()),
                 hasher: DefaultHashBuilder::default(),
                 #[cfg(feature = "debug")]

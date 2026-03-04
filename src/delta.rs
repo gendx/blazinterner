@@ -55,6 +55,13 @@ impl<T, Accum> DeltaEncoding<T, Accum> {
             _phantom: PhantomData,
         }
     }
+
+    pub(crate) fn map_ref<U>(&self, f: impl FnOnce(&T) -> U) -> DeltaEncoding<U, Accum> {
+        DeltaEncoding {
+            inner: f(&self.inner),
+            _phantom: PhantomData,
+        }
+    }
 }
 
 impl<T, Accum> Deref for DeltaEncoding<T, Accum> {

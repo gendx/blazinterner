@@ -486,7 +486,7 @@ where
         assert!(id <= u32::MAX as usize);
         let id = id as u32;
 
-        self.map.insert_unique(hash, id, |&i| {
+        self.map.insert_unique_mut(hash, id, |&i| {
             self.hasher.hash_one(self.vec[i as usize].borrow())
         });
         id
