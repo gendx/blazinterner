@@ -259,8 +259,9 @@ impl Visitor<'_> for U32Visitor {
 /// `Storage` type (that needs to be [`Sized`]).
 ///
 /// For [`Sized`] values, `Storage = T` is a good default that incurs no
-/// overhead. For non-[`Sized`] values such as [`str`](prim@str), you need to
-/// specify a [`Sized`] storage type, such as `Box<T>`.
+/// overhead. For non-[`Sized`] values such as [`dyn
+/// Trait`](https://doc.rust-lang.org/stable/std/keyword.dyn.html), you need to
+/// specify a [`Sized`] storage type, such as `Box<dyn Trait>`.
 pub struct Arena<T: ?Sized, Storage = T> {
     vec: AppendVec<Storage>,
     map: DashTable<u32>,
