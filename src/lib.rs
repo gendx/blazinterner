@@ -453,6 +453,9 @@ where
     /// If the value was already interned in this arena, it will simply be
     /// borrowed to retrieve its interning index. Otherwise it will then be
     /// converted to store it into the arena.
+    ///
+    /// See also [`intern_mut()`](Self::intern_mut), which is more efficient if
+    /// you hold a mutable reference to this arena as it avoids acquiring locks.
     pub fn intern(&self, value: impl Borrow<T> + Into<Storage>) -> Interned<T, Storage> {
         #[cfg(feature = "debug")]
         self.references.fetch_add(1, atomic::Ordering::Relaxed);
@@ -468,6 +471,37 @@ where
             .or_insert_with(|| {
                 let x: Storage = value.into();
                 let id = self.vec.push(x);
+                assert!(id <= u32::MAX as usize);
+                id as u32
+            })
+            .get();
+        Interned::new(id)
+    }
+
+    /// Interns the given value in this arena.
+    ///
+    /// If the value was already interned in this arena, it will simply be
+    /// borrowed to retrieve its interning index. Otherwise it will then be
+    /// converted to store it into the arena.
+    ///
+    /// Contrary to [`intern()`](Self::intern), no locks are held internally
+    /// because this function already takes an exclusive mutable reference to
+    /// this arena.
+    pub fn intern_mut(&mut self, value: impl Borrow<T> + Into<Storage>) -> Interned<T, Storage> {
+        #[cfg(feature = "debug")]
+        self.references.fetch_add(1, atomic::Ordering::Relaxed);
+
+        let hash = self.hasher.hash_one(value.borrow());
+        let id = *self
+            .map
+            .entry_mut(
+                hash,
+                |&i| self.vec[i as usize].borrow() == value.borrow(),
+                |&i| self.hasher.hash_one(self.vec[i as usize].borrow()),
+            )
+            .or_insert_with(|| {
+                let x: Storage = value.into();
+                let id = self.vec.push_mut(x);
                 assert!(id <= u32::MAX as usize);
                 id as u32
             })

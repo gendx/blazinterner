@@ -378,6 +378,10 @@ where
     ///
     /// If the value was already interned in this arena, its interning index
     /// will simply be returned. Otherwise it will be stored into the arena.
+    ///
+    /// See also [`intern_owned_mut()`](Self::intern_owned_mut), which is more
+    /// efficient if you hold a mutable reference to this arena as it avoids
+    /// acquiring locks.
     pub fn intern_owned(&self, value: Vec<T>) -> InternedSlice<T> {
         #[cfg(feature = "debug")]
         self.references.fetch_add(1, atomic::Ordering::Relaxed);
@@ -402,6 +406,38 @@ where
     ///
     /// If the value was already interned in this arena, its interning index
     /// will simply be returned. Otherwise it will be stored into the arena.
+    ///
+    /// Contrary to [`intern_owned()`](Self::intern_owned), no locks are held
+    /// internally because this function already takes an exclusive mutable
+    /// reference to this arena.
+    pub fn intern_owned_mut(&mut self, value: Vec<T>) -> InternedSlice<T> {
+        #[cfg(feature = "debug")]
+        self.references.fetch_add(1, atomic::Ordering::Relaxed);
+
+        let hash = self.hasher.hash_one(&value);
+        let id = *self
+            .map
+            .entry_mut(
+                hash,
+                |&i| self.rangevec.lookup_slice(i) == value,
+                |&i| self.hasher.hash_one(self.rangevec.lookup_slice(i)),
+            )
+            .or_insert_with(|| {
+                let range = self.rangevec.vec.push_owned_slice_mut(value);
+                self.rangevec.push_range_mut(range)
+            })
+            .get();
+        InternedSlice::new(id)
+    }
+
+    /// Interns the given value in this arena.
+    ///
+    /// If the value was already interned in this arena, its interning index
+    /// will simply be returned. Otherwise it will be stored into the arena.
+    ///
+    /// See also [`intern_array_mut()`](Self::intern_array_mut), which is more
+    /// efficient if you hold a mutable reference to this arena as it avoids
+    /// acquiring locks.
     pub fn intern_array<const N: usize>(&self, value: [T; N]) -> InternedSlice<T> {
         #[cfg(feature = "debug")]
         self.references.fetch_add(1, atomic::Ordering::Relaxed);
@@ -417,6 +453,34 @@ where
             .or_insert_with(|| {
                 let range = self.rangevec.vec.push_array(value);
                 self.rangevec.push_range(range)
+            })
+            .get();
+        InternedSlice::new(id)
+    }
+
+    /// Interns the given value in this arena.
+    ///
+    /// If the value was already interned in this arena, its interning index
+    /// will simply be returned. Otherwise it will be stored into the arena.
+    ///
+    /// Contrary to [`intern_array()`](Self::intern_array), no locks are held
+    /// internally because this function already takes an exclusive mutable
+    /// reference to this arena.
+    pub fn intern_array_mut<const N: usize>(&mut self, value: [T; N]) -> InternedSlice<T> {
+        #[cfg(feature = "debug")]
+        self.references.fetch_add(1, atomic::Ordering::Relaxed);
+
+        let hash = self.hasher.hash_one(&value);
+        let id = *self
+            .map
+            .entry_mut(
+                hash,
+                |&i| self.rangevec.lookup_slice(i) == value,
+                |&i| self.hasher.hash_one(self.rangevec.lookup_slice(i)),
+            )
+            .or_insert_with(|| {
+                let range = self.rangevec.vec.push_array_mut(value);
+                self.rangevec.push_range_mut(range)
             })
             .get();
         InternedSlice::new(id)
@@ -497,6 +561,9 @@ where
     ///
     /// If `T` is [`Copy`], it may be more efficient to call
     /// [`intern_copy()`](Self::intern_copy) instead.
+    ///
+    /// See also [`intern_mut()`](Self::intern_mut), which is more efficient if
+    /// you hold a mutable reference to this arena as it avoids acquiring locks.
     pub fn intern(&self, value: &[T]) -> InternedSlice<T> {
         #[cfg(feature = "debug")]
         self.references.fetch_add(1, atomic::Ordering::Relaxed);
@@ -512,6 +579,37 @@ where
             .or_insert_with(|| {
                 let range = self.rangevec.vec.push_slice(value);
                 self.rangevec.push_range(range)
+            })
+            .get();
+        InternedSlice::new(id)
+    }
+
+    /// Interns the given value in this arena.
+    ///
+    /// If the value was already interned in this arena, its interning index
+    /// will simply be returned. Otherwise it will be stored into the arena.
+    ///
+    /// If `T` is [`Copy`], it may be more efficient to call
+    /// [`intern_copy_mut()`](Self::intern_copy_mut) instead.
+    ///
+    /// Contrary to [`intern()`](Self::intern), no locks are held internally
+    /// because this function already takes an exclusive mutable reference to
+    /// this arena.
+    pub fn intern_mut(&mut self, value: &[T]) -> InternedSlice<T> {
+        #[cfg(feature = "debug")]
+        self.references.fetch_add(1, atomic::Ordering::Relaxed);
+
+        let hash = self.hasher.hash_one(value);
+        let id = *self
+            .map
+            .entry_mut(
+                hash,
+                |&i| self.rangevec.lookup_slice(i) == value,
+                |&i| self.hasher.hash_one(self.rangevec.lookup_slice(i)),
+            )
+            .or_insert_with(|| {
+                let range = self.rangevec.vec.push_slice_mut(value);
+                self.rangevec.push_range_mut(range)
             })
             .get();
         InternedSlice::new(id)
@@ -558,6 +656,10 @@ where
     /// instead. If `T` is also not [`Clone`], you can call
     /// [`intern_owned()`](Self::intern_owned) or
     /// [`intern_array()`](Self::intern_array).
+    ///
+    /// See also [`intern_copy_mut()`](Self::intern_copy_mut), which is more
+    /// efficient if you hold a mutable reference to this arena as it avoids
+    /// acquiring locks.
     pub fn intern_copy(&self, value: &[T]) -> InternedSlice<T> {
         #[cfg(feature = "debug")]
         self.references.fetch_add(1, atomic::Ordering::Relaxed);
@@ -573,6 +675,39 @@ where
             .or_insert_with(|| {
                 let range = self.rangevec.vec.push_slice_copy(value);
                 self.rangevec.push_range(range)
+            })
+            .get();
+        InternedSlice::new(id)
+    }
+
+    /// Interns the given value in this arena.
+    ///
+    /// If the value was already interned in this arena, its interning index
+    /// will simply be returned. Otherwise it will be stored into the arena.
+    ///
+    /// If `T` is only [`Clone`], you can call
+    /// [`intern_mut()`](Self::intern_mut) instead. If `T` is also not
+    /// [`Clone`], you can call [`intern_owned_mut()`](Self::intern_owned_mut)
+    /// or [`intern_array_mut()`](Self::intern_array_mut).
+    ///
+    /// Contrary to [`intern_copy()`](Self::intern_copy), no locks are held
+    /// internally because this function already takes an exclusive mutable
+    /// reference to this arena.
+    pub fn intern_copy_mut(&mut self, value: &[T]) -> InternedSlice<T> {
+        #[cfg(feature = "debug")]
+        self.references.fetch_add(1, atomic::Ordering::Relaxed);
+
+        let hash = self.hasher.hash_one(value);
+        let id = *self
+            .map
+            .entry(
+                hash,
+                |&i| self.rangevec.lookup_slice(i) == value,
+                |&i| self.hasher.hash_one(self.rangevec.lookup_slice(i)),
+            )
+            .or_insert_with(|| {
+                let range = self.rangevec.vec.push_slice_copy_mut(value);
+                self.rangevec.push_range_mut(range)
             })
             .get();
         InternedSlice::new(id)

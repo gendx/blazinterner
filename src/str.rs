@@ -268,6 +268,9 @@ impl ArenaStr {
     ///
     /// If the value was already interned in this arena, its interning index
     /// will simply be returned. Otherwise it will be stored into the arena.
+    ///
+    /// See also [`intern_mut()`](Self::intern_mut), which is more efficient if
+    /// you hold a mutable reference to this arena as it avoids acquiring locks.
     pub fn intern(&self, value: &str) -> InternedStr {
         #[cfg(feature = "debug")]
         self.references.fetch_add(1, atomic::Ordering::Relaxed);
@@ -281,6 +284,31 @@ impl ArenaStr {
                 |&i| self.hasher.hash_one(self.lookup_str(i)),
             )
             .or_insert_with(|| self.rangevec.push_str(value))
+            .get();
+        InternedStr::new(id)
+    }
+
+    /// Interns the given value in this arena.
+    ///
+    /// If the value was already interned in this arena, its interning index
+    /// will simply be returned. Otherwise it will be stored into the arena.
+    ///
+    /// Contrary to [`intern()`](Self::intern), no locks are held internally
+    /// because this function already takes an exclusive mutable reference to
+    /// this arena.
+    pub fn intern_mut(&mut self, value: &str) -> InternedStr {
+        #[cfg(feature = "debug")]
+        self.references.fetch_add(1, atomic::Ordering::Relaxed);
+
+        let hash = self.hasher.hash_one(value);
+        let id = *self
+            .map
+            .entry_mut(
+                hash,
+                |&i| self.rangevec.lookup_str(i) == value,
+                |&i| self.hasher.hash_one(self.rangevec.lookup_str(i)),
+            )
+            .or_insert_with(|| self.rangevec.push_str_mut(value))
             .get();
         InternedStr::new(id)
     }
