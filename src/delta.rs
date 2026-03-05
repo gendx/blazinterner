@@ -56,6 +56,7 @@ impl<T, Accum> DeltaEncoding<T, Accum> {
         }
     }
 
+    #[cfg(feature = "serde")]
     pub(crate) fn map_ref<U>(&self, f: impl FnOnce(&T) -> U) -> DeltaEncoding<U, Accum> {
         DeltaEncoding {
             inner: f(&self.inner),
