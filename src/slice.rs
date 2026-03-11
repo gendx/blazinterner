@@ -13,6 +13,7 @@ use serde::ser::{SerializeSeq, SerializeTuple};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 #[cfg(feature = "serde")]
 use serde_tuple::{Deserialize_tuple, Serialize_tuple};
+use std::borrow::Borrow;
 #[cfg(feature = "serde")]
 use std::cell::Cell;
 use std::cmp::Ordering;
@@ -268,13 +269,33 @@ where
     /// Otherwise, this simply returns [`None`] without adding the value to this
     /// arena.
     pub fn find(&self, value: &[T]) -> Option<InternedSlice<T>> {
-        let hash = self.hasher.hash_one(value);
+        let hash = self.hash_slice(value);
         self.map
             .find(hash, |&i| self.lookup_slice(i) == value)
             .map(|id| InternedSlice {
                 id: *id,
                 _phantom: PhantomData,
             })
+    }
+}
+
+impl<T> ArenaSlice<T>
+where
+    T: Hash,
+{
+    fn hash_slice(&self, slice: &[T]) -> u64 {
+        Self::hash_iter(&self.hasher, slice)
+    }
+
+    fn hash_iter(
+        hasher: &DefaultHashBuilder,
+        iter: impl IntoIterator<Item = impl Borrow<T>>,
+    ) -> u64 {
+        let mut hasher = hasher.build_hasher();
+        for t in iter.into_iter() {
+            t.borrow().hash(&mut hasher);
+        }
+        hasher.finish()
     }
 }
 
@@ -310,14 +331,14 @@ where
 
 impl<T> PartialEq for ArenaSlice<T>
 where
-    T: Eq + Hash,
+    T: Eq,
 {
     fn eq(&self, other: &Self) -> bool {
         self.iter().eq(other.iter())
     }
 }
 
-impl<T> Eq for ArenaSlice<T> where T: Eq + Hash {}
+impl<T> Eq for ArenaSlice<T> where T: Eq {}
 
 #[cfg(feature = "get-size2")]
 impl<T> GetSize for ArenaSlice<T>
@@ -372,6 +393,35 @@ impl<T> ArenaSlice<T> {
 
 impl<T> ArenaSlice<T>
 where
+    T: Eq,
+{
+    // TODO: use Iterator::eq_by when feature(iter_order_by) becomes stable.
+    fn iter_eq<'a>(
+        mut lhs: impl ExactSizeIterator<Item = &'a T>,
+        mut rhs: impl ExactSizeIterator<Item = T>,
+    ) -> bool
+    where
+        T: 'a,
+    {
+        if lhs.len() != rhs.len() {
+            return false;
+        }
+        loop {
+            match (lhs.next(), rhs.next()) {
+                (None, None) => return true,
+                (Some(_), None) | (None, Some(_)) => return false,
+                (Some(x), Some(y)) => {
+                    if *x != y {
+                        return false;
+                    }
+                }
+            }
+        }
+    }
+}
+
+impl<T> ArenaSlice<T>
+where
     T: Default + Eq + Hash,
 {
     /// Interns the given value in this arena.
@@ -386,13 +436,13 @@ where
         #[cfg(feature = "debug")]
         self.references.fetch_add(1, atomic::Ordering::Relaxed);
 
-        let hash = self.hasher.hash_one(&value);
+        let hash = self.hash_slice(&value);
         let id = *self
             .map
             .entry(
                 hash,
                 |&i| self.lookup_slice(i) == value,
-                |&i| self.hasher.hash_one(self.lookup_slice(i)),
+                |&i| self.hash_slice(self.lookup_slice(i)),
             )
             .or_insert_with(|| {
                 let range = self.rangevec.vec.push_owned_slice(value);
@@ -414,13 +464,13 @@ where
         #[cfg(feature = "debug")]
         self.references.fetch_add(1, atomic::Ordering::Relaxed);
 
-        let hash = self.hasher.hash_one(&value);
+        let hash = self.hash_slice(&value);
         let id = *self
             .map
             .entry_mut(
                 hash,
                 |&i| self.rangevec.lookup_slice(i) == value,
-                |&i| self.hasher.hash_one(self.rangevec.lookup_slice(i)),
+                |&i| Self::hash_iter(&self.hasher, self.rangevec.lookup_slice(i)),
             )
             .or_insert_with(|| {
                 let range = self.rangevec.vec.push_owned_slice_mut(value);
@@ -442,13 +492,13 @@ where
         #[cfg(feature = "debug")]
         self.references.fetch_add(1, atomic::Ordering::Relaxed);
 
-        let hash = self.hasher.hash_one(&value);
+        let hash = self.hash_slice(&value);
         let id = *self
             .map
             .entry(
                 hash,
                 |&i| self.lookup_slice(i) == value,
-                |&i| self.hasher.hash_one(self.lookup_slice(i)),
+                |&i| self.hash_slice(self.lookup_slice(i)),
             )
             .or_insert_with(|| {
                 let range = self.rangevec.vec.push_array(value);
@@ -470,16 +520,102 @@ where
         #[cfg(feature = "debug")]
         self.references.fetch_add(1, atomic::Ordering::Relaxed);
 
-        let hash = self.hasher.hash_one(&value);
+        let hash = self.hash_slice(&value);
         let id = *self
             .map
             .entry_mut(
                 hash,
                 |&i| self.rangevec.lookup_slice(i) == value,
-                |&i| self.hasher.hash_one(self.rangevec.lookup_slice(i)),
+                |&i| Self::hash_iter(&self.hasher, self.rangevec.lookup_slice(i)),
             )
             .or_insert_with(|| {
                 let range = self.rangevec.vec.push_array_mut(value);
+                self.rangevec.push_range_mut(range)
+            })
+            .get();
+        InternedSlice::new(id)
+    }
+
+    /// Interns the given iterator (collected as a slice) in this arena.
+    ///
+    /// If the value was already interned in this arena, its interning index
+    /// will simply be returned. Otherwise it will be stored into the arena.
+    ///
+    /// See also [`intern_iter_mut()`](Self::intern_iter_mut), which is more
+    /// efficient if you hold a mutable reference to this arena as it avoids
+    /// acquiring locks.
+    ///
+    /// # Safety
+    ///
+    /// This function requires the iterator length to be correct (and not to
+    /// change upon cloning). This is akin to the nightly-only
+    /// [`TrustedLen`](std::iter::TrustedLen) trait.
+    pub unsafe fn intern_iter(
+        &self,
+        value: impl ExactSizeIterator<Item = T> + Clone,
+    ) -> InternedSlice<T> {
+        #[cfg(feature = "debug")]
+        self.references.fetch_add(1, atomic::Ordering::Relaxed);
+
+        let hash = Self::hash_iter(&self.hasher, value.clone());
+
+        let id = *self
+            .map
+            .entry(
+                hash,
+                |&i| {
+                    let lhs = self.lookup_slice(i).iter();
+                    let rhs = value.clone();
+                    Self::iter_eq(lhs, rhs)
+                },
+                |&i| self.hash_slice(self.lookup_slice(i)),
+            )
+            .or_insert_with(|| {
+                // SAFETY: The caller ensures that the iterator length is correct.
+                let range = unsafe { self.rangevec.vec.push_contiguous(value) };
+                self.rangevec.push_range(range)
+            })
+            .get();
+        InternedSlice::new(id)
+    }
+
+    /// Interns the given iterator (collected as a slice) in this arena.
+    ///
+    /// If the value was already interned in this arena, its interning index
+    /// will simply be returned. Otherwise it will be stored into the arena.
+    ///
+    /// Contrary to [`intern_iter()`](Self::intern_iter), no locks are held
+    /// internally because this function already takes an exclusive mutable
+    /// reference to this arena.
+    ///
+    /// # Safety
+    ///
+    /// This function requires the iterator length to be correct (and not to
+    /// change upon cloning). This is akin to the nightly-only
+    /// [`TrustedLen`](std::iter::TrustedLen) trait.
+    pub unsafe fn intern_iter_mut(
+        &mut self,
+        value: impl ExactSizeIterator<Item = T> + Clone,
+    ) -> InternedSlice<T> {
+        #[cfg(feature = "debug")]
+        self.references.fetch_add(1, atomic::Ordering::Relaxed);
+
+        let hash = Self::hash_iter(&self.hasher, value.clone());
+
+        let id = *self
+            .map
+            .entry_mut(
+                hash,
+                |&i| {
+                    let lhs = self.rangevec.lookup_slice(i).iter();
+                    let rhs = value.clone();
+                    Self::iter_eq(lhs, rhs)
+                },
+                |&i| Self::hash_iter(&self.hasher, self.rangevec.lookup_slice(i)),
+            )
+            .or_insert_with(|| {
+                // SAFETY: The caller ensures that the iterator length is correct.
+                let range = unsafe { self.rangevec.vec.push_contiguous_mut(value) };
                 self.rangevec.push_range_mut(range)
             })
             .get();
@@ -493,13 +629,13 @@ where
         #[cfg(feature = "debug")]
         self.references.fetch_add(1, atomic::Ordering::Relaxed);
 
-        let hash = self.hasher.hash_one(&value);
+        let hash = self.hash_slice(&value);
 
         let range = self.rangevec.vec.push_owned_slice_mut(value);
         let id = self.rangevec.push_range_mut(range);
 
         self.map.insert_unique_mut(hash, id, |&i| {
-            self.hasher.hash_one(self.rangevec.lookup_slice(i))
+            Self::hash_iter(&self.hasher, self.rangevec.lookup_slice(i))
         });
         InternedSlice::new(id)
     }
@@ -511,13 +647,13 @@ where
         #[cfg(feature = "debug")]
         self.references.fetch_add(1, atomic::Ordering::Relaxed);
 
-        let hash = self.hasher.hash_one(&value);
+        let hash = self.hash_slice(&value);
 
         let range = self.rangevec.vec.push_array_mut(value);
         let id = self.rangevec.push_range_mut(range);
 
         self.map.insert_unique_mut(hash, id, |&i| {
-            self.hasher.hash_one(self.rangevec.lookup_slice(i))
+            Self::hash_iter(&self.hasher, self.rangevec.lookup_slice(i))
         });
         InternedSlice::new(id)
     }
@@ -541,10 +677,10 @@ where
         let range = unsafe { self.rangevec.vec.push_contiguous_mut(value) };
         let id = self.rangevec.push_range_mut(range.clone());
 
-        let hash = self.hasher.hash_one(&self.rangevec.vec[range]);
+        let hash = self.hash_slice(&self.rangevec.vec[range]);
 
         self.map.insert_unique_mut(hash, id, |&i| {
-            self.hasher.hash_one(self.rangevec.lookup_slice(i))
+            Self::hash_iter(&self.hasher, self.rangevec.lookup_slice(i))
         });
         InternedSlice::new(id)
     }
@@ -568,13 +704,13 @@ where
         #[cfg(feature = "debug")]
         self.references.fetch_add(1, atomic::Ordering::Relaxed);
 
-        let hash = self.hasher.hash_one(value);
+        let hash = self.hash_slice(value);
         let id = *self
             .map
             .entry(
                 hash,
                 |&i| self.lookup_slice(i) == value,
-                |&i| self.hasher.hash_one(self.lookup_slice(i)),
+                |&i| self.hash_slice(self.lookup_slice(i)),
             )
             .or_insert_with(|| {
                 let range = self.rangevec.vec.push_slice(value);
@@ -599,13 +735,13 @@ where
         #[cfg(feature = "debug")]
         self.references.fetch_add(1, atomic::Ordering::Relaxed);
 
-        let hash = self.hasher.hash_one(value);
+        let hash = self.hash_slice(value);
         let id = *self
             .map
             .entry_mut(
                 hash,
                 |&i| self.rangevec.lookup_slice(i) == value,
-                |&i| self.hasher.hash_one(self.rangevec.lookup_slice(i)),
+                |&i| Self::hash_iter(&self.hasher, self.rangevec.lookup_slice(i)),
             )
             .or_insert_with(|| {
                 let range = self.rangevec.vec.push_slice_mut(value);
@@ -631,13 +767,13 @@ where
         #[cfg(feature = "debug")]
         self.references.fetch_add(1, atomic::Ordering::Relaxed);
 
-        let hash = self.hasher.hash_one(value);
+        let hash = self.hash_slice(value);
 
         let range = self.rangevec.vec.push_slice_mut(value);
         let id = self.rangevec.push_range_mut(range);
 
         self.map.insert_unique_mut(hash, id, |&i| {
-            self.hasher.hash_one(self.rangevec.lookup_slice(i))
+            Self::hash_iter(&self.hasher, self.rangevec.lookup_slice(i))
         });
         id
     }
@@ -664,13 +800,13 @@ where
         #[cfg(feature = "debug")]
         self.references.fetch_add(1, atomic::Ordering::Relaxed);
 
-        let hash = self.hasher.hash_one(value);
+        let hash = self.hash_slice(value);
         let id = *self
             .map
             .entry(
                 hash,
                 |&i| self.lookup_slice(i) == value,
-                |&i| self.hasher.hash_one(self.lookup_slice(i)),
+                |&i| self.hash_slice(self.lookup_slice(i)),
             )
             .or_insert_with(|| {
                 let range = self.rangevec.vec.push_slice_copy(value);
@@ -697,13 +833,13 @@ where
         #[cfg(feature = "debug")]
         self.references.fetch_add(1, atomic::Ordering::Relaxed);
 
-        let hash = self.hasher.hash_one(value);
+        let hash = self.hash_slice(value);
         let id = *self
             .map
             .entry(
                 hash,
                 |&i| self.rangevec.lookup_slice(i) == value,
-                |&i| self.hasher.hash_one(self.rangevec.lookup_slice(i)),
+                |&i| Self::hash_iter(&self.hasher, self.rangevec.lookup_slice(i)),
             )
             .or_insert_with(|| {
                 let range = self.rangevec.vec.push_slice_copy_mut(value);
@@ -723,13 +859,13 @@ where
         #[cfg(feature = "debug")]
         self.references.fetch_add(1, atomic::Ordering::Relaxed);
 
-        let hash = self.hasher.hash_one(value);
+        let hash = self.hash_slice(value);
 
         let range = self.rangevec.vec.push_slice_copy_mut(value);
         let id = self.rangevec.push_range_mut(range);
 
         self.map.insert_unique_mut(hash, id, |&i| {
-            self.hasher.hash_one(self.rangevec.lookup_slice(i))
+            Self::hash_iter(&self.hasher, self.rangevec.lookup_slice(i))
         });
         id
     }
