@@ -11,6 +11,8 @@ use serde::ser::SerializeTuple;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 #[cfg(feature = "serde")]
+use serde_cow::CowStr;
+#[cfg(feature = "serde")]
 use std::cell::Cell;
 use std::fmt::Debug;
 use std::hash::{BuildHasher, Hash};
@@ -459,13 +461,13 @@ impl<'de> Visitor<'de> for ArenaStrVisitor {
         let sizes: Vec<u32> = seq
             .next_element()?
             .ok_or_else(|| A::Error::invalid_length(0, &self))?;
-        let string: &str = seq
+        let string: CowStr = seq
             .next_element()?
             .ok_or_else(|| A::Error::invalid_length(1, &self))?;
 
         let mut arena = ArenaStr {
             rangevec: RangeVecStr {
-                vec: AppendStr::with_capacity(string.len()),
+                vec: AppendStr::with_capacity(string.0.len()),
                 ranges: AppendVec::with_capacity(sizes.len()),
             },
             map: DashTable::with_capacity(sizes.len()),
@@ -477,7 +479,7 @@ impl<'de> Visitor<'de> for ArenaStrVisitor {
         let mut start = 0;
         for size in sizes {
             let size = size as usize;
-            arena.push(&string[start..start + size]);
+            arena.push(&string.0[start..start + size]);
             start += size;
         }
 
@@ -490,6 +492,7 @@ mod delta {
     use super::*;
     use crate::{Accumulator, DeltaEncoding};
     use serde::ser::SerializeSeq;
+    use serde_cow::CowBytes;
     use std::marker::PhantomData;
 
     impl<Accum> Serialize for DeltaEncoding<&ArenaStr, Accum>
@@ -594,13 +597,13 @@ mod delta {
             let sizes: Vec<u32> = seq
                 .next_element()?
                 .ok_or_else(|| A::Error::invalid_length(0, &self))?;
-            let bytes: &[u8] = seq
+            let bytes: CowBytes = seq
                 .next_element()?
                 .ok_or_else(|| A::Error::invalid_length(1, &self))?;
 
             let mut arena = ArenaStr {
                 rangevec: RangeVecStr {
-                    vec: AppendStr::with_capacity(bytes.len()),
+                    vec: AppendStr::with_capacity(bytes.0.len()),
                     ranges: AppendVec::with_capacity(sizes.len()),
                 },
                 map: DashTable::with_capacity(sizes.len()),
@@ -613,7 +616,7 @@ mod delta {
             let mut start = 0;
             for size in sizes {
                 let size = size as usize;
-                let delta = &bytes[start..start + size];
+                let delta = &bytes.0[start..start + size];
                 let string = acc.unfold(delta);
                 assert_eq!(
                     delta.len(),
