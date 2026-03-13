@@ -25,6 +25,12 @@ use std::sync::atomic::{self, AtomicUsize};
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct InternedStr(u32);
 
+impl Default for InternedStr {
+    fn default() -> Self {
+        Self::new(u32::MAX)
+    }
+}
+
 impl Debug for InternedStr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_tuple("I").field(&self.0).finish()

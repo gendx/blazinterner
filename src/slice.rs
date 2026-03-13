@@ -52,6 +52,12 @@ pub struct InternedSlice<T> {
     _phantom: PhantomData<fn() -> *const T>,
 }
 
+impl<T> Default for InternedSlice<T> {
+    fn default() -> Self {
+        Self::new(u32::MAX)
+    }
+}
+
 impl<T> Debug for InternedSlice<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_tuple("I").field(&self.id).finish()

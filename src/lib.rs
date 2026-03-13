@@ -74,6 +74,12 @@ pub struct Interned<T: ?Sized, Storage = T> {
     _phantom: PhantomData<fn() -> (*const T, *const Storage)>,
 }
 
+impl<T: ?Sized, Storage> Default for Interned<T, Storage> {
+    fn default() -> Self {
+        Self::new(u32::MAX)
+    }
+}
+
 impl<T: ?Sized, Storage> Debug for Interned<T, Storage> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_tuple("I").field(&self.id).finish()
