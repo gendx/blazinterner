@@ -35,6 +35,7 @@
 
 #[cfg(feature = "delta")]
 mod delta;
+mod mapping;
 mod slice;
 mod str;
 
@@ -45,6 +46,7 @@ pub use delta::{Accumulator, DeltaEncoding};
 #[cfg(feature = "get-size2")]
 use get_size2::{GetSize, GetSizeTracker};
 use hashbrown::DefaultHashBuilder;
+pub use mapping::{ForwardMapping, Mapping, ReverseMapping};
 #[cfg(feature = "serde")]
 use serde::de::{SeqAccess, Visitor};
 #[cfg(feature = "serde")]
@@ -151,11 +153,15 @@ impl<T: ?Sized, Storage> Interned<T, Storage> {
 }
 
 impl<T: ?Sized, Storage> Interned<T, Storage> {
-    fn new(id: u32) -> Self {
+    pub(crate) fn new(id: u32) -> Self {
         Self {
             id,
             _phantom: PhantomData,
         }
+    }
+
+    pub(crate) fn id_(&self) -> u32 {
+        self.id
     }
 }
 
@@ -517,7 +523,7 @@ where
 
     /// Unconditionally push a value, without validating that it's already
     /// interned.
-    fn push(&mut self, value: Storage) -> u32 {
+    pub(crate) fn push(&mut self, value: Storage) -> u32 {
         #[cfg(feature = "debug")]
         self.references.fetch_add(1, atomic::Ordering::Relaxed);
 

@@ -128,11 +128,15 @@ impl<T> InternedSlice<T> {
 }
 
 impl<T> InternedSlice<T> {
-    fn new(id: u32) -> Self {
+    pub(crate) fn new(id: u32) -> Self {
         Self {
             id,
             _phantom: PhantomData,
         }
+    }
+
+    pub(crate) fn id_(&self) -> u32 {
+        self.id
     }
 }
 
@@ -676,6 +680,21 @@ where
         &mut self,
         value: impl ExactSizeIterator<Item = T>,
     ) -> InternedSlice<T> {
+        // SAFETY: Simply forwarding to the crate-internal version.
+        unsafe { self.push_iter_mut_(value) }
+    }
+
+    /// Unconditionally push an iterator as a single contiguous value, without
+    /// validating that it's already interned.
+    ///
+    /// # Safety
+    ///
+    /// This function requires the iterator length to be correct. This is akin
+    /// to the nightly-only [`TrustedLen`](std::iter::TrustedLen) trait.
+    pub(crate) unsafe fn push_iter_mut_(
+        &mut self,
+        value: impl ExactSizeIterator<Item = T>,
+    ) -> InternedSlice<T> {
         #[cfg(feature = "debug")]
         self.references.fetch_add(1, atomic::Ordering::Relaxed);
 
@@ -769,7 +788,7 @@ where
 
     /// Unconditionally push a value, without validating that it's already
     /// interned.
-    fn push(&mut self, value: &[T]) -> u32 {
+    pub(crate) fn push(&mut self, value: &[T]) -> u32 {
         #[cfg(feature = "debug")]
         self.references.fetch_add(1, atomic::Ordering::Relaxed);
 

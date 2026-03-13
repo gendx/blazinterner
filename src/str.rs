@@ -59,8 +59,12 @@ impl InternedStr {
 }
 
 impl InternedStr {
-    fn new(id: u32) -> Self {
+    pub(crate) fn new(id: u32) -> Self {
         Self(id)
+    }
+
+    pub(crate) fn id_(&self) -> u32 {
+        self.0
     }
 }
 
