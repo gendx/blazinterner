@@ -132,7 +132,7 @@ pub struct ArenaStr {
 
 impl Clone for ArenaStr {
     fn clone(&self) -> Self {
-        let iter = self.iter();
+        let iter = self.iter_();
         let mut arena = Self::with_capacity(iter.len(), self.bytes());
         for s in iter {
             arena.push(s);
@@ -184,6 +184,40 @@ impl ArenaStr {
         self.strings() == 0
     }
 
+    /// Returns an iterator over all strings in this arena, in indexing order.
+    ///
+    /// Note that because [`ArenaStr`] is a concurrent data structure, this is
+    /// only a snapshot. Once this iterator has been created, for performance
+    /// reasons it will not iterate over items added afterwards, even on the
+    /// same thread.
+    ///
+    /// If you only need to access byte slices,
+    /// [`iter_bytes()`](Self::iter_bytes) may be more efficient.
+    #[cfg(feature = "raw")]
+    pub fn iter(&self) -> impl ExactSizeIterator<Item = &str> {
+        self.rangevec.iter()
+    }
+
+    fn iter_(&self) -> impl ExactSizeIterator<Item = &str> {
+        self.rangevec.iter()
+    }
+
+    /// Returns an iterator over all strings (viewed as byte slices) in this
+    /// arena, in indexing order.
+    ///
+    /// Note that because [`ArenaStr`] is a concurrent data structure, this is
+    /// only a snapshot. Once this iterator has been created, for performance
+    /// reasons it will not iterate over items added afterwards, even on the
+    /// same thread.
+    #[cfg(feature = "raw")]
+    pub fn iter_bytes(&self) -> impl ExactSizeIterator<Item = &[u8]> {
+        self.rangevec.iter_bytes()
+    }
+
+    fn iter_bytes_(&self) -> impl ExactSizeIterator<Item = &[u8]> {
+        self.rangevec.iter_bytes()
+    }
+
     /// Returns the given string's [`InternedStr`] handle if it is already
     /// interned.
     ///
@@ -200,16 +234,6 @@ impl ArenaStr {
     /// interned.
     pub fn push_mut(&mut self, value: &str) -> u32 {
         self.push(value)
-    }
-}
-
-impl ArenaStr {
-    fn iter(&self) -> impl ExactSizeIterator<Item = &str> {
-        self.rangevec.iter()
-    }
-
-    fn iter_bytes(&self) -> impl ExactSizeIterator<Item = &[u8]> {
-        self.rangevec.iter_bytes()
     }
 }
 
@@ -230,13 +254,13 @@ impl Default for ArenaStr {
 
 impl Debug for ArenaStr {
     fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        fmt.debug_list().entries(self.iter()).finish()
+        fmt.debug_list().entries(self.iter_()).finish()
     }
 }
 
 impl PartialEq for ArenaStr {
     fn eq(&self, other: &Self) -> bool {
-        self.iter_bytes().eq(other.iter_bytes())
+        self.iter_bytes_().eq(other.iter_bytes_())
     }
 }
 

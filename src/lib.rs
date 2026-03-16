@@ -333,6 +333,26 @@ impl<T: ?Sized, Storage> Arena<T, Storage> {
 
 impl<T: ?Sized, Storage> Arena<T, Storage>
 where
+    Storage: Borrow<T>,
+{
+    /// Returns an iterator over all items in this arena, in indexing order.
+    ///
+    /// Note that because [`Arena`] is a concurrent data structure, this is only
+    /// a snapshot. Once this iterator has been created, for performance reasons
+    /// it will not iterate over items added afterwards, even on the same
+    /// thread.
+    #[cfg(feature = "raw")]
+    pub fn iter(&self) -> impl ExactSizeIterator<Item = &T> {
+        self.iter_()
+    }
+
+    fn iter_(&self) -> impl ExactSizeIterator<Item = &T> {
+        self.vec.iter().map(|x| x.borrow())
+    }
+}
+
+impl<T: ?Sized, Storage> Arena<T, Storage>
+where
     T: Eq + Hash,
     Storage: Borrow<T>,
 {
@@ -364,15 +384,6 @@ where
     }
 }
 
-impl<T: ?Sized, Storage> Arena<T, Storage>
-where
-    Storage: Borrow<T>,
-{
-    fn iter(&self) -> impl ExactSizeIterator<Item = &T> {
-        self.vec.iter().map(|x| x.borrow())
-    }
-}
-
 impl<T: ?Sized, Storage> Default for Arena<T, Storage> {
     fn default() -> Self {
         Self {
@@ -392,7 +403,7 @@ where
     Storage: Borrow<T>,
 {
     fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        fmt.debug_list().entries(self.iter()).finish()
+        fmt.debug_list().entries(self.iter_()).finish()
     }
 }
 
@@ -402,7 +413,7 @@ where
     Storage: Borrow<T>,
 {
     fn eq(&self, other: &Self) -> bool {
-        self.iter().eq(other.iter())
+        self.iter_().eq(other.iter_())
     }
 }
 
@@ -584,7 +595,7 @@ where
     where
         S: Serializer,
     {
-        serializer.collect_seq(self.iter())
+        serializer.collect_seq(self.iter_())
     }
 }
 

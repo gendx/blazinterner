@@ -217,7 +217,7 @@ where
     T: Default + Clone + Eq + Hash,
 {
     fn clone(&self) -> Self {
-        let iter = self.iter();
+        let iter = self.iter_();
         let mut arena = Self::with_capacity(iter.len(), self.items());
         for slice in iter {
             arena.push(slice);
@@ -268,6 +268,21 @@ impl<T> ArenaSlice<T> {
     pub fn is_empty(&self) -> bool {
         self.slices() == 0
     }
+
+    /// Returns an iterator over all slices in this arena, in indexing order.
+    ///
+    /// Note that because [`ArenaSlice`] is a concurrent data structure, this is
+    /// only a snapshot. Once this iterator has been created, for performance
+    /// reasons it will not iterate over items added afterwards, even on the
+    /// same thread.
+    #[cfg(feature = "raw")]
+    pub fn iter(&self) -> impl ExactSizeIterator<Item = &[T]> {
+        self.rangevec.iter()
+    }
+
+    fn iter_(&self) -> impl ExactSizeIterator<Item = &[T]> {
+        self.rangevec.iter()
+    }
 }
 
 impl<T> ArenaSlice<T>
@@ -310,12 +325,6 @@ where
     }
 }
 
-impl<T> ArenaSlice<T> {
-    fn iter(&self) -> impl ExactSizeIterator<Item = &[T]> {
-        self.rangevec.iter()
-    }
-}
-
 impl<T> Default for ArenaSlice<T> {
     fn default() -> Self {
         Self {
@@ -336,7 +345,7 @@ where
     T: Debug,
 {
     fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        fmt.debug_list().entries(self.iter()).finish()
+        fmt.debug_list().entries(self.iter_()).finish()
     }
 }
 
@@ -345,7 +354,7 @@ where
     T: Eq,
 {
     fn eq(&self, other: &Self) -> bool {
-        self.iter().eq(other.iter())
+        self.iter_().eq(other.iter_())
     }
 }
 
