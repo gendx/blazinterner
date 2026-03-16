@@ -232,6 +232,7 @@ impl ArenaStr {
 
     /// Unconditionally push a value, without validating that it's already
     /// interned.
+    #[cfg(feature = "raw")]
     pub fn push_mut(&mut self, value: &str) -> u32 {
         self.push(value)
     }
@@ -352,7 +353,7 @@ impl ArenaStr {
 
     /// Unconditionally push a value, without validating that it's already
     /// interned.
-    fn push(&mut self, value: &str) -> u32 {
+    pub(crate) fn push(&mut self, value: &str) -> u32 {
         #[cfg(feature = "debug")]
         self.references.fetch_add(1, atomic::Ordering::Relaxed);
 

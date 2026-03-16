@@ -113,7 +113,7 @@ impl ArenaStr {
     pub fn map(&self, mapping: &ReverseMapping) -> Self {
         let mut arena = ArenaStr::with_capacity(self.strings(), self.bytes());
         for i in mapping.iter() {
-            arena.push_mut(self.lookup(InternedStr::new(i)));
+            arena.push(self.lookup(InternedStr::new(i)));
         }
         arena
     }
@@ -289,11 +289,11 @@ mod test {
     #[test]
     fn arena_str_sort() {
         let mut arena = ArenaStr::default();
-        arena.push_mut("bbbb");
-        arena.push_mut("dd");
-        arena.push_mut("e");
-        arena.push_mut("aaaaa");
-        arena.push_mut("ccc");
+        arena.push("bbbb");
+        arena.push("dd");
+        arena.push("e");
+        arena.push("aaaaa");
+        arena.push("ccc");
 
         let mapping = arena.sort();
         assert!(!mapping.is_identity());
@@ -310,11 +310,11 @@ mod test {
     #[test]
     fn arena_str_sort_identity() {
         let mut arena = ArenaStr::default();
-        arena.push_mut("e");
-        arena.push_mut("dd");
-        arena.push_mut("ccc");
-        arena.push_mut("bbbb");
-        arena.push_mut("aaaaa");
+        arena.push("e");
+        arena.push("dd");
+        arena.push("ccc");
+        arena.push("bbbb");
+        arena.push("aaaaa");
 
         let mapping = arena.sort();
         assert!(mapping.is_identity());
@@ -328,21 +328,21 @@ mod test {
     #[test]
     fn arena_str_sort_map() {
         let mut arena = ArenaStr::default();
-        arena.push_mut("bbbb");
-        arena.push_mut("dd");
-        arena.push_mut("e");
-        arena.push_mut("aaaaa");
-        arena.push_mut("ccc");
+        arena.push("bbbb");
+        arena.push("dd");
+        arena.push("e");
+        arena.push("aaaaa");
+        arena.push("ccc");
 
         let mapping = arena.sort();
         let sorted = arena.map(&mapping.reverse);
 
         let mut expected = ArenaStr::default();
-        expected.push_mut("e");
-        expected.push_mut("dd");
-        expected.push_mut("ccc");
-        expected.push_mut("bbbb");
-        expected.push_mut("aaaaa");
+        expected.push("e");
+        expected.push("dd");
+        expected.push("ccc");
+        expected.push("bbbb");
+        expected.push("aaaaa");
 
         assert_eq!(sorted, expected);
     }
