@@ -18,6 +18,14 @@ where
     }
 }
 
+impl<T: ?Sized, Storage> Arena<T, Storage> {
+    /// Returns a mapping to build an arena containing only the items of this
+    /// arena that satisfy the given predicate.
+    pub fn retain(&self, filter: impl Fn(Interned<T, Storage>) -> bool) -> Mapping {
+        Mapping::retain(self.len(), |i| filter(Interned::new(i)))
+    }
+}
+
 impl<T: ?Sized, Storage> Arena<T, Storage>
 where
     T: Eq + Hash,
@@ -44,6 +52,14 @@ where
         let reverse = ReverseMapping(mapping.into_boxed_slice());
         let forward = reverse.reverse();
         Mapping { forward, reverse }
+    }
+}
+
+impl<T> ArenaSlice<T> {
+    /// Returns a mapping to build an arena containing only the items of this
+    /// arena that satisfy the given predicate.
+    pub fn retain(&self, filter: impl Fn(InternedSlice<T>) -> bool) -> Mapping {
+        Mapping::retain(self.slices(), |i| filter(InternedSlice::new(i)))
     }
 }
 
@@ -109,6 +125,12 @@ impl ArenaStr {
         Mapping { forward, reverse }
     }
 
+    /// Returns a mapping to build an arena containing only the items of this
+    /// arena that satisfy the given predicate.
+    pub fn retain(&self, filter: impl Fn(InternedStr) -> bool) -> Mapping {
+        Mapping::retain(self.strings(), |i| filter(InternedStr::new(i)))
+    }
+
     /// Returns a re-ordered version of this arena based on the given mapping.
     pub fn map(&self, mapping: &ReverseMapping) -> Self {
         let mut arena = ArenaStr::with_capacity(mapping.len(), self.bytes());
@@ -149,6 +171,35 @@ impl Mapping {
     /// Checks wether this mapping is the identity.
     pub fn is_identity(&self) -> bool {
         self.forward.is_identity()
+    }
+
+    fn retain(len: usize, filter: impl Fn(u32) -> bool) -> Self {
+        let mut reverse = Vec::new();
+        let mut forward = Vec::with_capacity(len);
+        let mut next = 0;
+        let mut is_identity = true;
+
+        for i in 0..len as u32 {
+            if filter(i) {
+                reverse.push(i);
+                forward.push(next);
+                next += 1;
+            } else {
+                forward.push(u32::MAX);
+                is_identity = false;
+            }
+        }
+
+        let reverse = ReverseMapping(reverse.into_boxed_slice());
+        let forward = if is_identity {
+            MappingImpl::Identity(len as u32)
+        } else {
+            MappingImpl::Map(forward.into_boxed_slice())
+        };
+        Self {
+            forward: ForwardMapping(forward),
+            reverse,
+        }
     }
 }
 
@@ -350,6 +401,33 @@ mod test {
         expected.push("aaaaa");
 
         assert_eq!(sorted, expected);
+    }
+
+    #[test]
+    fn arena_str_retain_map() {
+        let mut arena = ArenaStr::default();
+        let _ = arena.intern_mut("bbbb");
+        let d = arena.intern_mut("dd");
+        let e = arena.intern_mut("e");
+        let _ = arena.intern_mut("aaaaa");
+        let c = arena.intern_mut("ccc");
+
+        let mapping = arena.retain(|i| arena.lookup(i).len() <= 3);
+        let filtered = arena.map(&mapping.reverse);
+
+        let mut expected = ArenaStr::default();
+        expected.push("dd");
+        expected.push("e");
+        expected.push("ccc");
+
+        assert_eq!(filtered, expected);
+
+        let cc = mapping.forward.map_str(c);
+        let dd = mapping.forward.map_str(d);
+        let ee = mapping.forward.map_str(e);
+        assert_eq!(filtered.lookup(cc), "ccc");
+        assert_eq!(filtered.lookup(dd), "dd");
+        assert_eq!(filtered.lookup(ee), "e");
     }
 
     #[test]
