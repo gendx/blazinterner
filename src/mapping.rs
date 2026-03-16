@@ -25,7 +25,7 @@ where
 {
     /// Returns a re-ordered version of this arena based on the given mapping.
     pub fn map(&self, mapping: &ReverseMapping) -> Self {
-        let mut arena = Arena::with_capacity(self.len());
+        let mut arena = Arena::with_capacity(mapping.len());
         for i in mapping.iter() {
             arena.push(self.lookup(Interned::new(i)));
         }
@@ -53,7 +53,7 @@ where
 {
     /// Returns a re-ordered version of this arena based on the given mapping.
     pub fn map(&self, mapping: &ReverseMapping) -> Self {
-        let mut arena = ArenaSlice::with_capacity(self.slices(), self.items());
+        let mut arena = ArenaSlice::with_capacity(mapping.len(), self.items());
         for i in mapping.iter() {
             arena.push(self.lookup(InternedSlice::new(i)));
         }
@@ -69,7 +69,7 @@ where
     /// where each slice element is additionally transformed according to
     /// the given function `f`.
     pub fn map2(&self, mapping: &ReverseMapping, f: impl Fn(&T) -> T) -> Self {
-        let mut arena = ArenaSlice::with_capacity(self.slices(), self.items());
+        let mut arena = ArenaSlice::with_capacity(mapping.len(), self.items());
         for i in mapping.iter() {
             let slice = self.lookup(InternedSlice::new(i));
             let iter = slice.iter().map(&f);
@@ -111,7 +111,7 @@ impl ArenaStr {
 
     /// Returns a re-ordered version of this arena based on the given mapping.
     pub fn map(&self, mapping: &ReverseMapping) -> Self {
-        let mut arena = ArenaStr::with_capacity(self.strings(), self.bytes());
+        let mut arena = ArenaStr::with_capacity(mapping.len(), self.bytes());
         for i in mapping.iter() {
             arena.push(self.lookup(InternedStr::new(i)));
         }
@@ -157,6 +157,11 @@ impl Mapping {
 pub struct ReverseMapping(Box<[u32]>);
 
 impl ReverseMapping {
+    /// Returns the number of mapped items.
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+
     fn reverse(&self) -> ForwardMapping {
         if self.is_identity() {
             ForwardMapping(MappingImpl::Identity(self.0.len() as u32))
