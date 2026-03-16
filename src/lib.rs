@@ -289,8 +289,9 @@ where
     Storage: Borrow<T> + Clone,
 {
     fn clone(&self) -> Self {
-        let mut arena = Self::with_capacity(self.len());
-        for value in self.vec.iter() {
+        let iter = self.vec.iter();
+        let mut arena = Self::with_capacity(iter.len());
+        for value in iter {
             arena.push(value.clone());
         }
         arena
@@ -367,7 +368,7 @@ impl<T: ?Sized, Storage> Arena<T, Storage>
 where
     Storage: Borrow<T>,
 {
-    fn iter(&self) -> impl Iterator<Item = &T> {
+    fn iter(&self) -> impl ExactSizeIterator<Item = &T> {
         self.vec.iter().map(|x| x.borrow())
     }
 }

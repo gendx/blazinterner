@@ -176,7 +176,7 @@ impl<T> RangeVec<T> {
         &self.vec[range]
     }
 
-    fn iter(&self) -> impl Iterator<Item = &[T]> {
+    fn iter(&self) -> impl ExactSizeIterator<Item = &[T]> {
         self.ranges
             .iter()
             .map(|&range| &self.vec[range.start as usize..range.end as usize])
@@ -217,8 +217,9 @@ where
     T: Default + Clone + Eq + Hash,
 {
     fn clone(&self) -> Self {
-        let mut arena = Self::with_capacity(self.slices(), self.items());
-        for slice in self.iter() {
+        let iter = self.iter();
+        let mut arena = Self::with_capacity(iter.len(), self.items());
+        for slice in iter {
             arena.push(slice);
         }
         arena
@@ -310,7 +311,7 @@ where
 }
 
 impl<T> ArenaSlice<T> {
-    fn iter(&self) -> impl Iterator<Item = &[T]> {
+    fn iter(&self) -> impl ExactSizeIterator<Item = &[T]> {
         self.rangevec.iter()
     }
 }

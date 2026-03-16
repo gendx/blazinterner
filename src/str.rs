@@ -86,13 +86,13 @@ impl RangeVecStr {
         &self.vec[range]
     }
 
-    fn iter(&self) -> impl Iterator<Item = &str> {
+    fn iter(&self) -> impl ExactSizeIterator<Item = &str> {
         self.ranges
             .iter()
             .map(|&range| &self.vec[range.start as usize..range.end as usize])
     }
 
-    fn iter_bytes(&self) -> impl Iterator<Item = &[u8]> {
+    fn iter_bytes(&self) -> impl ExactSizeIterator<Item = &[u8]> {
         self.ranges
             .iter()
             .map(|&range| self.vec.get_bytes(range.start as usize..range.end as usize))
@@ -132,8 +132,9 @@ pub struct ArenaStr {
 
 impl Clone for ArenaStr {
     fn clone(&self) -> Self {
-        let mut arena = Self::with_capacity(self.strings(), self.bytes());
-        for s in self.iter() {
+        let iter = self.iter();
+        let mut arena = Self::with_capacity(iter.len(), self.bytes());
+        for s in iter {
             arena.push(s);
         }
         arena
@@ -203,11 +204,11 @@ impl ArenaStr {
 }
 
 impl ArenaStr {
-    fn iter(&self) -> impl Iterator<Item = &str> {
+    fn iter(&self) -> impl ExactSizeIterator<Item = &str> {
         self.rangevec.iter()
     }
 
-    fn iter_bytes(&self) -> impl Iterator<Item = &[u8]> {
+    fn iter_bytes(&self) -> impl ExactSizeIterator<Item = &[u8]> {
         self.rangevec.iter_bytes()
     }
 }
