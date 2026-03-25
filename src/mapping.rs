@@ -1,4 +1,6 @@
 use super::{Arena, ArenaSlice, ArenaStr, Interned, InternedSlice, InternedStr};
+#[cfg(feature = "retain")]
+use bit_set::BitSet;
 use std::borrow::Borrow;
 use std::cmp::Ordering;
 use std::hash::Hash;
@@ -23,6 +25,17 @@ impl<T: ?Sized, Storage> Arena<T, Storage> {
     /// arena that satisfy the given predicate.
     pub fn retain(&self, filter: impl Fn(Interned<T, Storage>) -> bool) -> Mapping {
         Mapping::retain(self.len(), |i| filter(Interned::new(i)))
+    }
+
+    /// Returns a mapping to build an arena containing only the given items.
+    #[cfg(feature = "retain")]
+    pub fn retain_values(&self, values: impl Iterator<Item = Interned<T, Storage>>) -> Mapping {
+        let len = self.len();
+        let mut retained_ids = BitSet::with_capacity(len);
+        for v in values {
+            retained_ids.insert(v.id_() as usize);
+        }
+        Mapping::retain(len, |i| retained_ids.contains(i as usize))
     }
 }
 
@@ -60,6 +73,17 @@ impl<T> ArenaSlice<T> {
     /// arena that satisfy the given predicate.
     pub fn retain(&self, filter: impl Fn(InternedSlice<T>) -> bool) -> Mapping {
         Mapping::retain(self.slices(), |i| filter(InternedSlice::new(i)))
+    }
+
+    /// Returns a mapping to build an arena containing only the given items.
+    #[cfg(feature = "retain")]
+    pub fn retain_values(&self, values: impl Iterator<Item = InternedSlice<T>>) -> Mapping {
+        let len = self.slices();
+        let mut retained_ids = BitSet::with_capacity(len);
+        for v in values {
+            retained_ids.insert(v.id_() as usize);
+        }
+        Mapping::retain(len, |i| retained_ids.contains(i as usize))
     }
 }
 
@@ -129,6 +153,17 @@ impl ArenaStr {
     /// arena that satisfy the given predicate.
     pub fn retain(&self, filter: impl Fn(InternedStr) -> bool) -> Mapping {
         Mapping::retain(self.strings(), |i| filter(InternedStr::new(i)))
+    }
+
+    /// Returns a mapping to build an arena containing only the given items.
+    #[cfg(feature = "retain")]
+    pub fn retain_values(&self, values: impl Iterator<Item = InternedStr>) -> Mapping {
+        let len = self.strings();
+        let mut retained_ids = BitSet::with_capacity(len);
+        for v in values {
+            retained_ids.insert(v.id_() as usize);
+        }
+        Mapping::retain(len, |i| retained_ids.contains(i as usize))
     }
 
     /// Returns a re-ordered version of this arena based on the given mapping.
@@ -413,6 +448,34 @@ mod test {
         let c = arena.intern_mut("ccc");
 
         let mapping = arena.retain(|i| arena.lookup(i).len() <= 3);
+        let filtered = arena.map(&mapping.reverse);
+
+        let mut expected = ArenaStr::default();
+        expected.push("dd");
+        expected.push("e");
+        expected.push("ccc");
+
+        assert_eq!(filtered, expected);
+
+        let cc = mapping.forward.map_str(c);
+        let dd = mapping.forward.map_str(d);
+        let ee = mapping.forward.map_str(e);
+        assert_eq!(filtered.lookup(cc), "ccc");
+        assert_eq!(filtered.lookup(dd), "dd");
+        assert_eq!(filtered.lookup(ee), "e");
+    }
+
+    #[cfg(feature = "retain")]
+    #[test]
+    fn arena_str_retain_values_map() {
+        let mut arena = ArenaStr::default();
+        let _ = arena.intern_mut("bbbb");
+        let d = arena.intern_mut("dd");
+        let e = arena.intern_mut("e");
+        let _ = arena.intern_mut("aaaaa");
+        let c = arena.intern_mut("ccc");
+
+        let mapping = arena.retain_values([d, e, c].into_iter());
         let filtered = arena.map(&mapping.reverse);
 
         let mut expected = ArenaStr::default();

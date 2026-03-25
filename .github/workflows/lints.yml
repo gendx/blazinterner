@@ -27,6 +27,8 @@ jobs:
         run: cargo clippy --verbose --all --no-default-features --features=get-size2
       - name: Check Clippy lints (raw feature)
         run: cargo clippy --verbose --all --no-default-features --features=raw
+      - name: Check Clippy lints (retain feature)
+        run: cargo clippy --verbose --all --no-default-features --features=retain
       - name: Check Clippy lints (serde feature)
         run: cargo clippy --verbose --all --no-default-features --features=serde
 

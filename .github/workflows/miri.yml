@@ -14,3 +14,5 @@ jobs:
 
       - name: Run miri tests
         run: cargo miri test --all
+      - name: Run miri tests (all features)
+        run: cargo miri test --all --all-features

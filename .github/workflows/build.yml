@@ -32,6 +32,8 @@ jobs:
         run: cargo build --verbose --all --no-default-features --features=get-size2
       - name: Build (raw feature)
         run: cargo build --verbose --all --no-default-features --features=raw
+      - name: Build (retain feature)
+        run: cargo build --verbose --all --no-default-features --features=retain
       - name: Build (serde feature)
         run: cargo build --verbose --all --no-default-features --features=serde
 
