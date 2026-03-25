@@ -4,6 +4,8 @@ use bit_set::BitSet;
 use std::borrow::Borrow;
 use std::cmp::Ordering;
 use std::hash::Hash;
+#[cfg(feature = "retain")]
+use std::marker::PhantomData;
 
 impl<T: ?Sized, Storage> Arena<T, Storage>
 where
@@ -28,14 +30,28 @@ impl<T: ?Sized, Storage> Arena<T, Storage> {
     }
 
     /// Returns a mapping to build an arena containing only the given items.
+    ///
+    /// See also [`retain_builder()`](Self::retain_builder) if you need a more
+    /// flexible way of adding items to retain.
     #[cfg(feature = "retain")]
     pub fn retain_values(&self, values: impl Iterator<Item = Interned<T, Storage>>) -> Mapping {
-        let len = self.len();
-        let mut retained_ids = BitSet::with_capacity(len);
+        let mut builder = self.retain_builder();
         for v in values {
-            retained_ids.insert(v.id_() as usize);
+            builder = builder.insert(v);
         }
-        Mapping::retain(len, |i| retained_ids.contains(i as usize))
+        builder.build()
+    }
+
+    /// Returns a builder allowing to select items to retain, and create an
+    /// arena containing only these.
+    #[cfg(feature = "retain")]
+    pub fn retain_builder(&self) -> RetainBuilder<T, Storage> {
+        let len = self.len();
+        RetainBuilder {
+            len,
+            retained: BitSet::with_capacity(len),
+            _phantom: PhantomData,
+        }
     }
 }
 
@@ -51,6 +67,32 @@ where
             arena.push(self.lookup(Interned::new(i)));
         }
         arena
+    }
+}
+
+/// A builder to select items to retain in an [`Arena`].
+#[cfg(feature = "retain")]
+pub struct RetainBuilder<T: ?Sized, Storage> {
+    len: usize,
+    retained: BitSet,
+    _phantom: PhantomData<Interned<T, Storage>>,
+}
+
+#[cfg(feature = "retain")]
+impl<T: ?Sized, Storage> RetainBuilder<T, Storage> {
+    /// Marks the given item as retained.
+    ///
+    /// Inserting the same item multiple times is allowed: the item will be
+    /// retained.
+    pub fn insert(mut self, value: Interned<T, Storage>) -> Self {
+        self.retained.insert(value.id_() as usize);
+        self
+    }
+
+    /// Returns a mapping to build an [`Arena`] containing only the items that
+    /// have been retained via [`insert()`](Self::insert).
+    pub fn build(self) -> Mapping {
+        Mapping::retain(self.len, |i| self.retained.contains(i as usize))
     }
 }
 
@@ -76,14 +118,28 @@ impl<T> ArenaSlice<T> {
     }
 
     /// Returns a mapping to build an arena containing only the given items.
+    ///
+    /// See also [`retain_builder()`](Self::retain_builder) if you need a more
+    /// flexible way of adding items to retain.
     #[cfg(feature = "retain")]
     pub fn retain_values(&self, values: impl Iterator<Item = InternedSlice<T>>) -> Mapping {
-        let len = self.slices();
-        let mut retained_ids = BitSet::with_capacity(len);
+        let mut builder = self.retain_builder();
         for v in values {
-            retained_ids.insert(v.id_() as usize);
+            builder = builder.insert(v);
         }
-        Mapping::retain(len, |i| retained_ids.contains(i as usize))
+        builder.build()
+    }
+
+    /// Returns a builder allowing to select items to retain, and create an
+    /// arena containing only these.
+    #[cfg(feature = "retain")]
+    pub fn retain_builder(&self) -> RetainSliceBuilder<T> {
+        let len = self.slices();
+        RetainSliceBuilder {
+            len,
+            retained: BitSet::with_capacity(len),
+            _phantom: PhantomData,
+        }
     }
 }
 
@@ -118,6 +174,32 @@ where
             unsafe { arena.push_iter_mut_(iter) };
         }
         arena
+    }
+}
+
+/// A builder to select items to retain in an [`ArenaSlice`].
+#[cfg(feature = "retain")]
+pub struct RetainSliceBuilder<T> {
+    len: usize,
+    retained: BitSet,
+    _phantom: PhantomData<InternedSlice<T>>,
+}
+
+#[cfg(feature = "retain")]
+impl<T> RetainSliceBuilder<T> {
+    /// Marks the given item as retained.
+    ///
+    /// Inserting the same item multiple times is allowed: the item will be
+    /// retained.
+    pub fn insert(mut self, value: InternedSlice<T>) -> Self {
+        self.retained.insert(value.id_() as usize);
+        self
+    }
+
+    /// Returns a mapping to build an [`ArenaSlice`] containing only the items
+    /// that have been retained via [`insert()`](Self::insert).
+    pub fn build(self) -> Mapping {
+        Mapping::retain(self.len, |i| self.retained.contains(i as usize))
     }
 }
 
@@ -156,14 +238,28 @@ impl ArenaStr {
     }
 
     /// Returns a mapping to build an arena containing only the given items.
+    ///
+    /// See also [`retain_builder()`](Self::retain_builder) if you need a more
+    /// flexible way of adding items to retain.
     #[cfg(feature = "retain")]
     pub fn retain_values(&self, values: impl Iterator<Item = InternedStr>) -> Mapping {
-        let len = self.strings();
-        let mut retained_ids = BitSet::with_capacity(len);
+        let mut builder = self.retain_builder();
         for v in values {
-            retained_ids.insert(v.id_() as usize);
+            builder = builder.insert(v);
         }
-        Mapping::retain(len, |i| retained_ids.contains(i as usize))
+        builder.build()
+    }
+
+    /// Returns a builder allowing to select items to retain, and create an
+    /// arena containing only these.
+    #[cfg(feature = "retain")]
+    pub fn retain_builder(&self) -> RetainStrBuilder {
+        let len = self.strings();
+        RetainStrBuilder {
+            len,
+            retained: BitSet::with_capacity(len),
+            _phantom: PhantomData,
+        }
     }
 
     /// Returns a re-ordered version of this arena based on the given mapping.
@@ -173,6 +269,32 @@ impl ArenaStr {
             arena.push(self.lookup(InternedStr::new(i)));
         }
         arena
+    }
+}
+
+/// A builder to select items to retain in an [`ArenaStr`].
+#[cfg(feature = "retain")]
+pub struct RetainStrBuilder {
+    len: usize,
+    retained: BitSet,
+    _phantom: PhantomData<InternedStr>,
+}
+
+#[cfg(feature = "retain")]
+impl RetainStrBuilder {
+    /// Marks the given item as retained.
+    ///
+    /// Inserting the same item multiple times is allowed: the item will be
+    /// retained.
+    pub fn insert(mut self, value: InternedStr) -> Self {
+        self.retained.insert(value.id_() as usize);
+        self
+    }
+
+    /// Returns a mapping to build an [`ArenaStr`] containing only the items
+    /// that have been retained via [`insert()`](Self::insert).
+    pub fn build(self) -> Mapping {
+        Mapping::retain(self.len, |i| self.retained.contains(i as usize))
     }
 }
 
@@ -439,7 +561,7 @@ mod test {
     }
 
     #[test]
-    fn arena_str_retain_map() {
+    fn arena_str_retain() {
         let mut arena = ArenaStr::default();
         let _ = arena.intern_mut("bbbb");
         let d = arena.intern_mut("dd");
@@ -467,7 +589,7 @@ mod test {
 
     #[cfg(feature = "retain")]
     #[test]
-    fn arena_str_retain_values_map() {
+    fn arena_str_retain_values() {
         let mut arena = ArenaStr::default();
         let _ = arena.intern_mut("bbbb");
         let d = arena.intern_mut("dd");
@@ -476,6 +598,34 @@ mod test {
         let c = arena.intern_mut("ccc");
 
         let mapping = arena.retain_values([d, e, c].into_iter());
+        let filtered = arena.map(&mapping.reverse);
+
+        let mut expected = ArenaStr::default();
+        expected.push("dd");
+        expected.push("e");
+        expected.push("ccc");
+
+        assert_eq!(filtered, expected);
+
+        let cc = mapping.forward.map_str(c);
+        let dd = mapping.forward.map_str(d);
+        let ee = mapping.forward.map_str(e);
+        assert_eq!(filtered.lookup(cc), "ccc");
+        assert_eq!(filtered.lookup(dd), "dd");
+        assert_eq!(filtered.lookup(ee), "e");
+    }
+
+    #[cfg(feature = "retain")]
+    #[test]
+    fn arena_str_retain_builder() {
+        let mut arena = ArenaStr::default();
+        let _ = arena.intern_mut("bbbb");
+        let d = arena.intern_mut("dd");
+        let e = arena.intern_mut("e");
+        let _ = arena.intern_mut("aaaaa");
+        let c = arena.intern_mut("ccc");
+
+        let mapping = arena.retain_builder().insert(d).insert(e).insert(c).build();
         let filtered = arena.map(&mapping.reverse);
 
         let mut expected = ArenaStr::default();

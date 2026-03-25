@@ -47,6 +47,8 @@ pub use delta::{Accumulator, DeltaEncoding};
 use get_size2::{GetSize, GetSizeTracker};
 use hashbrown::DefaultHashBuilder;
 pub use mapping::{ForwardMapping, Mapping, ReverseMapping};
+#[cfg(feature = "retain")]
+pub use mapping::{RetainBuilder, RetainSliceBuilder, RetainStrBuilder};
 #[cfg(feature = "serde")]
 use serde::de::{SeqAccess, Visitor};
 #[cfg(feature = "serde")]
