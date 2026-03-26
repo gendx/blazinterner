@@ -72,7 +72,7 @@ where
 
 /// A builder to select items to retain in an [`Arena`].
 #[cfg(feature = "retain")]
-pub struct RetainBuilder<T: ?Sized, Storage> {
+pub struct RetainBuilder<T: ?Sized, Storage = T> {
     len: usize,
     retained: BitSet,
     _phantom: PhantomData<Interned<T, Storage>>,
