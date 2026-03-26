@@ -37,7 +37,7 @@ impl<T: ?Sized, Storage> Arena<T, Storage> {
     pub fn retain_values(&self, values: impl Iterator<Item = Interned<T, Storage>>) -> Mapping {
         let mut builder = self.retain_builder();
         for v in values {
-            builder = builder.insert(v);
+            builder.insert(v);
         }
         builder.build()
     }
@@ -82,11 +82,10 @@ pub struct RetainBuilder<T: ?Sized, Storage> {
 impl<T: ?Sized, Storage> RetainBuilder<T, Storage> {
     /// Marks the given item as retained.
     ///
-    /// Inserting the same item multiple times is allowed: the item will be
-    /// retained.
-    pub fn insert(mut self, value: Interned<T, Storage>) -> Self {
-        self.retained.insert(value.id_() as usize);
-        self
+    /// Returns [`true`] if the item is newly inserted and [`false`] if it was
+    /// already inserted before.
+    pub fn insert(&mut self, value: Interned<T, Storage>) -> bool {
+        self.retained.insert(value.id_() as usize)
     }
 
     /// Returns a mapping to build an [`Arena`] containing only the items that
@@ -125,7 +124,7 @@ impl<T> ArenaSlice<T> {
     pub fn retain_values(&self, values: impl Iterator<Item = InternedSlice<T>>) -> Mapping {
         let mut builder = self.retain_builder();
         for v in values {
-            builder = builder.insert(v);
+            builder.insert(v);
         }
         builder.build()
     }
@@ -189,11 +188,10 @@ pub struct RetainSliceBuilder<T> {
 impl<T> RetainSliceBuilder<T> {
     /// Marks the given item as retained.
     ///
-    /// Inserting the same item multiple times is allowed: the item will be
-    /// retained.
-    pub fn insert(mut self, value: InternedSlice<T>) -> Self {
-        self.retained.insert(value.id_() as usize);
-        self
+    /// Returns [`true`] if the item is newly inserted and [`false`] if it was
+    /// already inserted before.
+    pub fn insert(&mut self, value: InternedSlice<T>) -> bool {
+        self.retained.insert(value.id_() as usize)
     }
 
     /// Returns a mapping to build an [`ArenaSlice`] containing only the items
@@ -245,7 +243,7 @@ impl ArenaStr {
     pub fn retain_values(&self, values: impl Iterator<Item = InternedStr>) -> Mapping {
         let mut builder = self.retain_builder();
         for v in values {
-            builder = builder.insert(v);
+            builder.insert(v);
         }
         builder.build()
     }
@@ -284,11 +282,10 @@ pub struct RetainStrBuilder {
 impl RetainStrBuilder {
     /// Marks the given item as retained.
     ///
-    /// Inserting the same item multiple times is allowed: the item will be
-    /// retained.
-    pub fn insert(mut self, value: InternedStr) -> Self {
-        self.retained.insert(value.id_() as usize);
-        self
+    /// Returns [`true`] if the item is newly inserted and [`false`] if it was
+    /// already inserted before.
+    pub fn insert(&mut self, value: InternedStr) -> bool {
+        self.retained.insert(value.id_() as usize)
     }
 
     /// Returns a mapping to build an [`ArenaStr`] containing only the items
@@ -625,7 +622,12 @@ mod test {
         let _ = arena.intern_mut("aaaaa");
         let c = arena.intern_mut("ccc");
 
-        let mapping = arena.retain_builder().insert(d).insert(e).insert(c).build();
+        let mut builder = arena.retain_builder();
+        assert!(builder.insert(d));
+        assert!(builder.insert(e));
+        assert!(builder.insert(c));
+        assert!(!builder.insert(e));
+        let mapping = builder.build();
         let filtered = arena.map(&mapping.reverse);
 
         let mut expected = ArenaStr::default();
