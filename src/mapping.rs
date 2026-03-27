@@ -71,6 +71,9 @@ where
 }
 
 /// A builder to select items to retain in an [`Arena`].
+///
+/// This struct is created by the [`retain_builder()`](Arena::retain_builder)
+/// method on [`Arena`].
 #[cfg(feature = "retain")]
 pub struct RetainBuilder<T: ?Sized, Storage = T> {
     len: usize,
@@ -177,6 +180,9 @@ where
 }
 
 /// A builder to select items to retain in an [`ArenaSlice`].
+///
+/// This struct is created by the
+/// [`retain_builder()`](ArenaSlice::retain_builder) method on [`ArenaSlice`].
 #[cfg(feature = "retain")]
 pub struct RetainSliceBuilder<T> {
     len: usize,
@@ -271,6 +277,9 @@ impl ArenaStr {
 }
 
 /// A builder to select items to retain in an [`ArenaStr`].
+///
+/// This struct is created by the [`retain_builder()`](ArenaStr::retain_builder)
+/// method on [`ArenaStr`].
 #[cfg(feature = "retain")]
 pub struct RetainStrBuilder {
     len: usize,
