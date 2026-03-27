@@ -68,6 +68,20 @@ where
         }
         arena
     }
+
+    /// Returns a re-ordered version of this arena based on the given mapping,
+    /// where each item is additionally transformed according to the given
+    /// function `f`.
+    ///
+    /// The transformation function must be injective, i.e. different inputs
+    /// must map to different outputs.
+    pub fn map2(&self, mapping: &ReverseMapping, f: impl Fn(&T) -> Storage) -> Self {
+        let mut arena = Arena::with_capacity(mapping.len());
+        for i in mapping.iter() {
+            arena.push(f(self.lookup_ref(Interned::new(i))));
+        }
+        arena
+    }
 }
 
 /// A builder to select items to retain in an [`Arena`].
@@ -166,6 +180,9 @@ where
     /// Returns a re-ordered version of this arena based on the given mapping,
     /// where each slice element is additionally transformed according to
     /// the given function `f`.
+    ///
+    /// The transformation function must be injective, i.e. different inputs
+    /// must map to different outputs.
     pub fn map2(&self, mapping: &ReverseMapping, f: impl Fn(&T) -> T) -> Self {
         let mut arena = ArenaSlice::with_capacity(mapping.len(), self.items());
         for i in mapping.iter() {
