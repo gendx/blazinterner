@@ -336,6 +336,21 @@ impl Mapping {
         self.forward.is_identity()
     }
 
+    /// Maps the given interned handle to a handle for the re-ordered arena.
+    pub fn map<T: ?Sized, Storage>(&self, index: Interned<T, Storage>) -> Interned<T, Storage> {
+        self.forward.map(index)
+    }
+
+    /// Maps the given interned handle to a handle for the re-ordered arena.
+    pub fn map_slice<T>(&self, index: InternedSlice<T>) -> InternedSlice<T> {
+        self.forward.map_slice(index)
+    }
+
+    /// Maps the given interned handle to a handle for the re-ordered arena.
+    pub fn map_str(&self, index: InternedStr) -> InternedStr {
+        self.forward.map_str(index)
+    }
+
     fn retain(len: usize, filter: impl Fn(u32) -> bool) -> Self {
         let mut reverse = Vec::new();
         let mut forward = Vec::with_capacity(len);
