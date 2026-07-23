@@ -12,22 +12,23 @@ edition = "2024"
 rust-version = "1.91.0"
 
 [package.metadata.docs.rs]
-features = ["debug", "delta", "get-size2", "raw", "retain", "serde"]
+features = ["debug", "delta", "get-size2", "raw", "retain", "serde", "sync"]
 rustdoc-args = ["--cfg", "docsrs", "--generate-link-to-definition"]
 
 [features]
-default = []
+default = ["sync"]
 debug = ["get-size2"]
 delta = []
 get-size2 = ["dep:get-size2"]
 raw = []
 retain = ["dep:bit-set"]
 serde = ["dep:serde", "dep:serde_tuple"]
+sync = ["dep:dashtable"]
 
 [dependencies]
 appendvec = "0.1.5"
 bit-set = { optional = true, version = "0.9.1" }
-dashtable = "0.1.2"
+dashtable = { optional = true, version = "0.1.2" }
 get-size2 = { optional = true, version = "0.7.4", features = ["derive"] }
 hashbrown = "0.16.1"
 serde = { optional = true, version = "1.0.228", features = ["derive"] }

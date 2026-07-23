@@ -12,7 +12,12 @@ jobs:
         with:
           components: rust-src
 
-      - name: Run tests
+      - name: Run tests (default features)
         run: cargo test --release -Zbuild-std --target=x86_64-unknown-linux-gnu --verbose --all
+      - name: Run tests (no default features)
+        run: cargo test --release -Zbuild-std --target=x86_64-unknown-linux-gnu --verbose --all --no-default-features
+
+      - name: Run tests (all features except sync)
+        run: cargo test --release -Zbuild-std --target=x86_64-unknown-linux-gnu --verbose --all --no-default-features --features=debug,delta,get-size2,raw,retain,serde
       - name: Run tests (all features)
         run: cargo test --release -Zbuild-std --target=x86_64-unknown-linux-gnu --verbose --all --all-features

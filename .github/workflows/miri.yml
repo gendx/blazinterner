@@ -12,7 +12,7 @@ jobs:
         with:
           components: miri
 
-      - name: Run miri tests
-        run: cargo miri test --all
+      - name: Run miri tests (no default features)
+        run: cargo miri test --all --no-default-features
       - name: Run miri tests (all features)
         run: cargo miri test --all --all-features

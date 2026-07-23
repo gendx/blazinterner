@@ -40,12 +40,15 @@ mod slice;
 mod str;
 
 use appendvec::AppendVec;
+#[cfg(feature = "sync")]
 use dashtable::DashTable;
 #[cfg(feature = "delta")]
 pub use delta::{Accumulator, DeltaEncoding};
 #[cfg(feature = "get-size2")]
 use get_size2::{GetSize, GetSizeTracker};
 use hashbrown::DefaultHashBuilder;
+#[cfg(not(feature = "sync"))]
+use hashbrown::HashTable;
 pub use mapping::{ForwardMapping, Mapping, ReverseMapping};
 #[cfg(feature = "retain")]
 pub use mapping::{RetainBuilder, RetainSliceBuilder, RetainStrBuilder};
@@ -278,6 +281,9 @@ impl Visitor<'_> for U32Visitor {
 /// specify a [`Sized`] storage type, such as `Box<dyn Trait>`.
 pub struct Arena<T: ?Sized, Storage = T> {
     vec: AppendVec<Storage>,
+    #[cfg(not(feature = "sync"))]
+    map: HashTable<u32>,
+    #[cfg(feature = "sync")]
     map: DashTable<u32>,
     hasher: DefaultHashBuilder,
     #[cfg(feature = "debug")]
@@ -306,6 +312,9 @@ impl<T: ?Sized, Storage> Arena<T, Storage> {
     pub fn with_capacity(len: usize) -> Self {
         Self {
             vec: AppendVec::with_capacity(len),
+            #[cfg(not(feature = "sync"))]
+            map: HashTable::with_capacity(len),
+            #[cfg(feature = "sync")]
             map: DashTable::with_capacity(len),
             hasher: DefaultHashBuilder::default(),
             #[cfg(feature = "debug")]
@@ -390,6 +399,9 @@ impl<T: ?Sized, Storage> Default for Arena<T, Storage> {
     fn default() -> Self {
         Self {
             vec: AppendVec::new(),
+            #[cfg(not(feature = "sync"))]
+            map: HashTable::new(),
+            #[cfg(feature = "sync")]
             map: DashTable::new(),
             hasher: DefaultHashBuilder::default(),
             #[cfg(feature = "debug")]
@@ -482,6 +494,7 @@ where
     ///
     /// See also [`intern_mut()`](Self::intern_mut), which is more efficient if
     /// you hold a mutable reference to this arena as it avoids acquiring locks.
+    #[cfg(feature = "sync")]
     pub fn intern(&self, value: impl Borrow<T> + Into<Storage>) -> Interned<T, Storage> {
         #[cfg(feature = "debug")]
         self.references.fetch_add(1, atomic::Ordering::Relaxed);
@@ -515,16 +528,24 @@ where
     /// this arena.
     pub fn intern_mut(&mut self, value: impl Borrow<T> + Into<Storage>) -> Interned<T, Storage> {
         #[cfg(feature = "debug")]
-        self.references.fetch_add(1, atomic::Ordering::Relaxed);
+        {
+            *self.references.get_mut() += 1;
+        }
 
         let hash = self.hasher.hash_one(value.borrow());
-        let id = *self
-            .map
-            .entry_mut(
-                hash,
-                |&i| self.vec[i as usize].borrow() == value.borrow(),
-                |&i| self.hasher.hash_one(self.vec[i as usize].borrow()),
-            )
+        #[cfg(not(feature = "sync"))]
+        let entry = self.map.entry(
+            hash,
+            |&i| self.vec[i as usize].borrow() == value.borrow(),
+            |&i| self.hasher.hash_one(self.vec[i as usize].borrow()),
+        );
+        #[cfg(feature = "sync")]
+        let entry = self.map.entry_mut(
+            hash,
+            |&i| self.vec[i as usize].borrow() == value.borrow(),
+            |&i| self.hasher.hash_one(self.vec[i as usize].borrow()),
+        );
+        let id = *entry
             .or_insert_with(|| {
                 let x: Storage = value.into();
                 let id = self.vec.push_mut(x);
@@ -539,7 +560,9 @@ where
     /// interned.
     pub(crate) fn push(&mut self, value: Storage) -> u32 {
         #[cfg(feature = "debug")]
-        self.references.fetch_add(1, atomic::Ordering::Relaxed);
+        {
+            *self.references.get_mut() += 1;
+        }
 
         let hash = self.hasher.hash_one(value.borrow());
 
@@ -547,6 +570,11 @@ where
         assert!(id <= u32::MAX as usize);
         let id = id as u32;
 
+        #[cfg(not(feature = "sync"))]
+        self.map.insert_unique(hash, id, |&i| {
+            self.hasher.hash_one(self.vec[i as usize].borrow())
+        });
+        #[cfg(feature = "sync")]
         self.map.insert_unique_mut(hash, id, |&i| {
             self.hasher.hash_one(self.vec[i as usize].borrow())
         });
@@ -647,14 +675,7 @@ where
     {
         let mut arena = match seq.size_hint() {
             None => Arena::default(),
-            Some(size_hint) => Arena {
-                vec: AppendVec::with_capacity(size_hint),
-                map: DashTable::with_capacity(size_hint),
-                hasher: DefaultHashBuilder::default(),
-                #[cfg(feature = "debug")]
-                references: AtomicUsize::new(0),
-                _phantom: PhantomData,
-            },
+            Some(size_hint) => Arena::with_capacity(size_hint),
         };
 
         while let Some(t) = seq.next_element()? {
@@ -669,8 +690,10 @@ where
 mod test {
     use super::*;
     use std::borrow::Cow;
+    #[cfg(feature = "sync")]
     use std::thread;
 
+    #[cfg(feature = "sync")]
     #[test]
     fn test_intern_lookup() {
         let arena: Arena<u32> = Arena::default();
@@ -683,13 +706,28 @@ mod test {
         }
     }
 
+    #[test]
+    fn test_intern_mut_lookup() {
+        let mut arena: Arena<u32> = Arena::default();
+        for i in 0..100 {
+            assert_eq!(arena.intern_mut(2 * i).id, i);
+        }
+        for i in 0..100 {
+            assert_eq!(*arena.lookup_ref(Interned::new(i)), 2 * i);
+            assert_eq!(arena.lookup(Interned::new(i)), 2 * i);
+        }
+    }
+
+    #[cfg(feature = "sync")]
     const NUM_READERS: usize = 4;
+    #[cfg(feature = "sync")]
     const NUM_WRITERS: usize = 4;
-    #[cfg(not(miri))]
+    #[cfg(all(feature = "sync", not(miri)))]
     const NUM_ITEMS: usize = 1_000_000;
-    #[cfg(miri)]
+    #[cfg(all(feature = "sync", miri))]
     const NUM_ITEMS: usize = 100;
 
+    #[cfg(feature = "sync")]
     #[test]
     fn test_intern_lookup_concurrent_reads() {
         let arena: Arena<u32, Box<u32>> = Arena::default();
@@ -716,6 +754,7 @@ mod test {
         });
     }
 
+    #[cfg(feature = "sync")]
     #[test]
     fn test_intern_lookup_concurrent_writes() {
         let arena: Arena<u32, Box<u32>> = Arena::default();
@@ -742,6 +781,7 @@ mod test {
         });
     }
 
+    #[cfg(feature = "sync")]
     #[test]
     fn test_intern_lookup_concurrent_readwrites() {
         let arena: Arena<u32, Box<u32>> = Arena::default();
@@ -770,6 +810,7 @@ mod test {
         });
     }
 
+    #[cfg(feature = "sync")]
     #[test]
     fn test_boxed_str_interner() {
         let arena: Arena<str, Box<str>> = Arena::default();
@@ -790,17 +831,37 @@ mod test {
         assert_eq!(arena.intern(key).id, 2);
     }
 
+    #[test]
+    fn test_boxed_str_interner_mut() {
+        let mut arena: Arena<str, Box<str>> = Arena::default();
+
+        let key: &str = "Hello";
+        assert_eq!(arena.intern_mut(key).id, 0);
+
+        let key: String = "world".into();
+        assert_eq!(arena.intern_mut(key).id, 1);
+
+        let key: Box<str> = "Hello".into();
+        assert_eq!(arena.intern_mut(key).id, 0);
+
+        let key: Box<str> = "world".into();
+        assert_eq!(arena.intern_mut(key).id, 1);
+
+        let key: Cow<'_, str> = "Hello world".into();
+        assert_eq!(arena.intern_mut(key).id, 2);
+    }
+
     #[cfg(feature = "serde")]
     #[test]
     fn test_serde_postcard() {
-        let arena: Arena<u32> = Arena::default();
+        let mut arena: Arena<u32> = Arena::default();
 
-        let a = arena.intern(0);
-        let b = arena.intern(1);
-        let c = arena.intern(22);
-        let d = arena.intern(333);
-        let e = arena.intern(4444);
-        let f = arena.intern(55555);
+        let a = arena.intern_mut(0);
+        let b = arena.intern_mut(1);
+        let c = arena.intern_mut(22);
+        let d = arena.intern_mut(333);
+        let e = arena.intern_mut(4444);
+        let f = arena.intern_mut(55555);
 
         assert_eq!(arena.len(), 6);
 
@@ -833,14 +894,14 @@ mod test {
     #[cfg(feature = "serde")]
     #[test]
     fn test_serde_json() {
-        let arena: Arena<u32> = Arena::default();
+        let mut arena: Arena<u32> = Arena::default();
 
-        let a = arena.intern(0);
-        let b = arena.intern(1);
-        let c = arena.intern(22);
-        let d = arena.intern(333);
-        let e = arena.intern(4444);
-        let f = arena.intern(55555);
+        let a = arena.intern_mut(0);
+        let b = arena.intern_mut(1);
+        let c = arena.intern_mut(22);
+        let d = arena.intern_mut(333);
+        let e = arena.intern_mut(4444);
+        let f = arena.intern_mut(55555);
 
         assert_eq!(arena.len(), 6);
 

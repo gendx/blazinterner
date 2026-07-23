@@ -16,6 +16,8 @@ jobs:
         run: cargo clippy --verbose --all
       - name: Check Clippy lints (no default features)
         run: cargo clippy --verbose --all --no-default-features
+      - name: Check Clippy lints (all features except sync)
+        run: cargo clippy --verbose --all --no-default-features --features=debug,delta,get-size2,raw,retain,serde
       - name: Check Clippy lints (all features)
         run: cargo clippy --verbose --all --all-features
 
@@ -31,13 +33,23 @@ jobs:
         run: cargo clippy --verbose --all --no-default-features --features=retain
       - name: Check Clippy lints (serde feature)
         run: cargo clippy --verbose --all --no-default-features --features=serde
+      - name: Check Clippy lints (sync feature)
+        run: cargo clippy --verbose --all --no-default-features --features=sync
 
       - name: Check Clippy lints on tests (default features)
         run: cargo clippy --verbose --all --tests
+      - name: Check Clippy lints on tests (no default features)
+        run: cargo clippy --verbose --all --tests --no-default-features
+      - name: Check Clippy lints on tests (all features except sync)
+        run: cargo clippy --verbose --all --tests --no-default-features --features=debug,delta,get-size2,raw,retain,serde
       - name: Check Clippy lints on tests (all features)
         run: cargo clippy --verbose --all --tests --all-features
 
       - name: Check Clippy lints on doctests (default features)
         run: cargo test --verbose --doc
+      - name: Check Clippy lints on doctests (no default features)
+        run: cargo test --verbose --doc --no-default-features
+      - name: Check Clippy lints on doctests (all features except sync)
+        run: cargo test --verbose --doc --no-default-features --features=debug,delta,get-size2,raw,retain,serde
       - name: Check Clippy lints on doctests (all features)
         run: cargo test --verbose --doc --all-features

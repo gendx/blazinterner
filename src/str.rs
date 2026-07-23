@@ -1,9 +1,12 @@
 use crate::CopyRangeU32;
 use appendvec::{AppendStr, AppendVec};
+#[cfg(feature = "sync")]
 use dashtable::DashTable;
 #[cfg(feature = "get-size2")]
 use get_size2::{GetSize, GetSizeTracker};
 use hashbrown::DefaultHashBuilder;
+#[cfg(not(feature = "sync"))]
+use hashbrown::HashTable;
 #[cfg(feature = "serde")]
 use serde::de::{Error, SeqAccess, Visitor};
 #[cfg(feature = "serde")]
@@ -98,6 +101,7 @@ impl RangeVecStr {
             .map(|&range| self.vec.get_bytes(range.start as usize..range.end as usize))
     }
 
+    #[cfg(feature = "sync")]
     fn push_str(&self, value: &str) -> u32 {
         let range = self.vec.push_str(value);
         assert!(range.start <= u32::MAX as usize);
@@ -124,6 +128,9 @@ impl RangeVecStr {
 /// Interning arena for strings.
 pub struct ArenaStr {
     rangevec: RangeVecStr,
+    #[cfg(not(feature = "sync"))]
+    map: HashTable<u32>,
+    #[cfg(feature = "sync")]
     map: DashTable<u32>,
     hasher: DefaultHashBuilder,
     #[cfg(feature = "debug")]
@@ -150,6 +157,9 @@ impl ArenaStr {
                 vec: AppendStr::with_capacity(bytes),
                 ranges: AppendVec::with_capacity(strings),
             },
+            #[cfg(not(feature = "sync"))]
+            map: HashTable::with_capacity(strings),
+            #[cfg(feature = "sync")]
             map: DashTable::with_capacity(strings),
             hasher: DefaultHashBuilder::default(),
             #[cfg(feature = "debug")]
@@ -245,6 +255,9 @@ impl Default for ArenaStr {
                 vec: AppendStr::new(),
                 ranges: AppendVec::new(),
             },
+            #[cfg(not(feature = "sync"))]
+            map: HashTable::new(),
+            #[cfg(feature = "sync")]
             map: DashTable::new(),
             hasher: DefaultHashBuilder::default(),
             #[cfg(feature = "debug")]
@@ -309,6 +322,7 @@ impl ArenaStr {
     ///
     /// See also [`intern_mut()`](Self::intern_mut), which is more efficient if
     /// you hold a mutable reference to this arena as it avoids acquiring locks.
+    #[cfg(feature = "sync")]
     pub fn intern(&self, value: &str) -> InternedStr {
         #[cfg(feature = "debug")]
         self.references.fetch_add(1, atomic::Ordering::Relaxed);
@@ -336,16 +350,24 @@ impl ArenaStr {
     /// this arena.
     pub fn intern_mut(&mut self, value: &str) -> InternedStr {
         #[cfg(feature = "debug")]
-        self.references.fetch_add(1, atomic::Ordering::Relaxed);
+        {
+            *self.references.get_mut() += 1;
+        }
 
         let hash = self.hasher.hash_one(value);
-        let id = *self
-            .map
-            .entry_mut(
-                hash,
-                |&i| self.rangevec.lookup_str(i) == value,
-                |&i| self.hasher.hash_one(self.rangevec.lookup_str(i)),
-            )
+        #[cfg(not(feature = "sync"))]
+        let entry = self.map.entry(
+            hash,
+            |&i| self.rangevec.lookup_str(i) == value,
+            |&i| self.hasher.hash_one(self.rangevec.lookup_str(i)),
+        );
+        #[cfg(feature = "sync")]
+        let entry = self.map.entry_mut(
+            hash,
+            |&i| self.rangevec.lookup_str(i) == value,
+            |&i| self.hasher.hash_one(self.rangevec.lookup_str(i)),
+        );
+        let id = *entry
             .or_insert_with(|| self.rangevec.push_str_mut(value))
             .get();
         InternedStr::new(id)
@@ -355,10 +377,17 @@ impl ArenaStr {
     /// interned.
     pub(crate) fn push(&mut self, value: &str) -> u32 {
         #[cfg(feature = "debug")]
-        self.references.fetch_add(1, atomic::Ordering::Relaxed);
+        {
+            *self.references.get_mut() += 1;
+        }
 
         let hash = self.hasher.hash_one(value);
         let id = self.rangevec.push_str_mut(value);
+        #[cfg(not(feature = "sync"))]
+        self.map.insert_unique(hash, id, |&i| {
+            self.hasher.hash_one(self.rangevec.lookup_str(i))
+        });
+        #[cfg(feature = "sync")]
         self.map.insert_unique_mut(hash, id, |&i| {
             self.hasher.hash_one(self.rangevec.lookup_str(i))
         });
@@ -501,16 +530,7 @@ impl<'de> Visitor<'de> for ArenaStrVisitor {
             .next_element()?
             .ok_or_else(|| A::Error::invalid_length(1, &self))?;
 
-        let mut arena = ArenaStr {
-            rangevec: RangeVecStr {
-                vec: AppendStr::with_capacity(string.0.len()),
-                ranges: AppendVec::with_capacity(sizes.len()),
-            },
-            map: DashTable::with_capacity(sizes.len()),
-            hasher: DefaultHashBuilder::default(),
-            #[cfg(feature = "debug")]
-            references: AtomicUsize::new(0),
-        };
+        let mut arena = ArenaStr::with_capacity(sizes.len(), string.0.len());
 
         let mut start = 0;
         for size in sizes {
@@ -637,16 +657,7 @@ mod delta {
                 .next_element()?
                 .ok_or_else(|| A::Error::invalid_length(1, &self))?;
 
-            let mut arena = ArenaStr {
-                rangevec: RangeVecStr {
-                    vec: AppendStr::with_capacity(bytes.0.len()),
-                    ranges: AppendVec::with_capacity(sizes.len()),
-                },
-                map: DashTable::with_capacity(sizes.len()),
-                hasher: DefaultHashBuilder::default(),
-                #[cfg(feature = "debug")]
-                references: AtomicUsize::new(0),
-            };
+            let mut arena = ArenaStr::with_capacity(sizes.len(), bytes.0.len());
 
             let mut acc = Accum::default();
             let mut start = 0;
@@ -676,6 +687,7 @@ mod test {
     use super::*;
     #[cfg(all(feature = "delta", feature = "serde"))]
     use crate::{Accumulator, DeltaEncoding};
+    #[cfg(feature = "sync")]
     use std::thread;
 
     fn make_utf8_string(mut i: u32) -> String {
@@ -722,14 +734,14 @@ mod test {
 
     #[test]
     fn test_lookup() {
-        let arena = ArenaStr::default();
+        let mut arena = ArenaStr::default();
 
-        let empty = arena.intern("");
-        let a = arena.intern("a");
-        let b = arena.intern("bb");
-        let c = arena.intern("ccc");
-        let d = arena.intern("dddd");
-        let e = arena.intern("eeeee");
+        let empty = arena.intern_mut("");
+        let a = arena.intern_mut("a");
+        let b = arena.intern_mut("bb");
+        let c = arena.intern_mut("ccc");
+        let d = arena.intern_mut("dddd");
+        let e = arena.intern_mut("eeeee");
 
         assert_eq!(arena.lookup(empty), "");
         assert_eq!(arena.lookup(a), "a");
@@ -739,6 +751,7 @@ mod test {
         assert_eq!(arena.lookup(e), "eeeee");
     }
 
+    #[cfg(feature = "sync")]
     #[test]
     fn test_intern_lookup() {
         let arena = ArenaStr::default();
@@ -750,13 +763,27 @@ mod test {
         }
     }
 
+    #[test]
+    fn test_intern_mut_lookup() {
+        let mut arena = ArenaStr::default();
+        for i in 0..100 {
+            assert_eq!(arena.intern_mut(&make_utf8_string(i)).0, i);
+        }
+        for i in 0..100 {
+            assert_eq!(arena.lookup(InternedStr::new(i)), &make_utf8_string(i));
+        }
+    }
+
+    #[cfg(feature = "sync")]
     const NUM_READERS: usize = 4;
+    #[cfg(feature = "sync")]
     const NUM_WRITERS: usize = 4;
-    #[cfg(not(miri))]
+    #[cfg(all(feature = "sync", not(miri)))]
     const NUM_ITEMS: usize = 1_000_000;
-    #[cfg(miri)]
+    #[cfg(all(feature = "sync", miri))]
     const NUM_ITEMS: usize = 100;
 
+    #[cfg(feature = "sync")]
     #[test]
     fn test_intern_lookup_concurrent_reads() {
         let arena = ArenaStr::default();
@@ -786,6 +813,7 @@ mod test {
         });
     }
 
+    #[cfg(feature = "sync")]
     #[test]
     fn test_intern_lookup_concurrent_writes() {
         let arena = ArenaStr::default();
@@ -815,6 +843,7 @@ mod test {
         });
     }
 
+    #[cfg(feature = "sync")]
     #[test]
     fn test_intern_lookup_concurrent_readwrites() {
         let arena = ArenaStr::default();
@@ -849,14 +878,14 @@ mod test {
     #[cfg(feature = "serde")]
     #[test]
     fn test_serde_postcard() {
-        let arena = ArenaStr::default();
+        let mut arena = ArenaStr::default();
 
-        let empty = arena.intern("");
-        let a = arena.intern("a");
-        let b = arena.intern("bb");
-        let c = arena.intern("ccc");
-        let d = arena.intern("dddd");
-        let e = arena.intern("eeeee");
+        let empty = arena.intern_mut("");
+        let a = arena.intern_mut("a");
+        let b = arena.intern_mut("bb");
+        let c = arena.intern_mut("ccc");
+        let d = arena.intern_mut("dddd");
+        let e = arena.intern_mut("eeeee");
 
         assert_eq!(arena.strings(), 6);
         assert!(arena.bytes() >= 15);
@@ -894,14 +923,14 @@ mod test {
     #[cfg(feature = "serde")]
     #[test]
     fn test_serde_json() {
-        let arena = ArenaStr::default();
+        let mut arena = ArenaStr::default();
 
-        let empty = arena.intern("");
-        let a = arena.intern("a");
-        let b = arena.intern("bb");
-        let c = arena.intern("ccc");
-        let d = arena.intern("dddd");
-        let e = arena.intern("eeeee");
+        let empty = arena.intern_mut("");
+        let a = arena.intern_mut("a");
+        let b = arena.intern_mut("bb");
+        let c = arena.intern_mut("ccc");
+        let d = arena.intern_mut("dddd");
+        let e = arena.intern_mut("eeeee");
 
         assert_eq!(arena.strings(), 6);
         assert!(arena.bytes() >= 15);
@@ -960,14 +989,14 @@ mod test {
     #[cfg(all(feature = "delta", feature = "serde"))]
     #[test]
     fn test_serde_delta() {
-        let arena = ArenaStr::default();
+        let mut arena = ArenaStr::default();
 
-        let empty = arena.intern("");
-        let a = arena.intern("a");
-        let b = arena.intern("bb");
-        let c = arena.intern("ccc");
-        let d = arena.intern("dddd");
-        let e = arena.intern("eeeee");
+        let empty = arena.intern_mut("");
+        let a = arena.intern_mut("a");
+        let b = arena.intern_mut("bb");
+        let c = arena.intern_mut("ccc");
+        let d = arena.intern_mut("dddd");
+        let e = arena.intern_mut("eeeee");
 
         assert_eq!(arena.strings(), 6);
         assert!(arena.bytes() >= 15);

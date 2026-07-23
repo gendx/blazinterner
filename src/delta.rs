@@ -129,14 +129,9 @@ where
 mod serialization {
     use super::*;
     use crate::Arena;
-    use appendvec::AppendVec;
-    use dashtable::DashTable;
-    use hashbrown::DefaultHashBuilder;
     use serde::de::{SeqAccess, Visitor};
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
     use std::hash::Hash;
-    #[cfg(feature = "debug")]
-    use std::sync::atomic::AtomicUsize;
 
     impl<T: ?Sized, Storage, DeltaStorage, Accum> Serialize for DeltaEncoding<&Arena<T, Storage>, Accum>
     where
@@ -205,14 +200,7 @@ mod serialization {
         {
             let mut arena = match seq.size_hint() {
                 None => Arena::default(),
-                Some(size_hint) => Arena {
-                    vec: AppendVec::with_capacity(size_hint),
-                    map: DashTable::with_capacity(size_hint),
-                    hasher: DefaultHashBuilder::default(),
-                    #[cfg(feature = "debug")]
-                    references: AtomicUsize::new(0),
-                    _phantom: PhantomData,
-                },
+                Some(size_hint) => Arena::with_capacity(size_hint),
             };
 
             let mut acc = Accum::default();

@@ -1,10 +1,13 @@
 #[cfg(feature = "serde")]
 use super::U32Visitor;
 use appendvec::AppendVec;
+#[cfg(feature = "sync")]
 use dashtable::DashTable;
 #[cfg(feature = "get-size2")]
 use get_size2::{GetSize, GetSizeTracker};
 use hashbrown::DefaultHashBuilder;
+#[cfg(not(feature = "sync"))]
+use hashbrown::HashTable;
 #[cfg(feature = "serde")]
 use serde::de::{Error, SeqAccess, Visitor};
 #[cfg(feature = "serde")]
@@ -182,6 +185,7 @@ impl<T> RangeVec<T> {
             .map(|&range| &self.vec[range.start as usize..range.end as usize])
     }
 
+    #[cfg(feature = "sync")]
     fn push_range(&self, range: Range<usize>) -> u32 {
         assert!(range.start <= u32::MAX as usize);
         assert!(range.end <= u32::MAX as usize);
@@ -206,6 +210,9 @@ impl<T> RangeVec<T> {
 /// Interning arena for slices of type `T`.
 pub struct ArenaSlice<T> {
     rangevec: RangeVec<T>,
+    #[cfg(not(feature = "sync"))]
+    map: HashTable<u32>,
+    #[cfg(feature = "sync")]
     map: DashTable<u32>,
     hasher: DefaultHashBuilder,
     #[cfg(feature = "debug")]
@@ -235,6 +242,9 @@ impl<T> ArenaSlice<T> {
                 vec: AppendVec::with_capacity(items),
                 ranges: AppendVec::with_capacity(slices),
             },
+            #[cfg(not(feature = "sync"))]
+            map: HashTable::with_capacity(slices),
+            #[cfg(feature = "sync")]
             map: DashTable::with_capacity(slices),
             hasher: DefaultHashBuilder::default(),
             #[cfg(feature = "debug")]
@@ -332,6 +342,9 @@ impl<T> Default for ArenaSlice<T> {
                 vec: AppendVec::new(),
                 ranges: AppendVec::new(),
             },
+            #[cfg(not(feature = "sync"))]
+            map: HashTable::new(),
+            #[cfg(feature = "sync")]
             map: DashTable::new(),
             hasher: DefaultHashBuilder::default(),
             #[cfg(feature = "debug")]
@@ -452,6 +465,7 @@ where
     /// See also [`intern_owned_mut()`](Self::intern_owned_mut), which is more
     /// efficient if you hold a mutable reference to this arena as it avoids
     /// acquiring locks.
+    #[cfg(feature = "sync")]
     pub fn intern_owned(&self, value: Vec<T>) -> InternedSlice<T> {
         #[cfg(feature = "debug")]
         self.references.fetch_add(1, atomic::Ordering::Relaxed);
@@ -482,16 +496,24 @@ where
     /// reference to this arena.
     pub fn intern_owned_mut(&mut self, value: Vec<T>) -> InternedSlice<T> {
         #[cfg(feature = "debug")]
-        self.references.fetch_add(1, atomic::Ordering::Relaxed);
+        {
+            *self.references.get_mut() += 1;
+        }
 
         let hash = self.hash_slice(&value);
-        let id = *self
-            .map
-            .entry_mut(
-                hash,
-                |&i| self.rangevec.lookup_slice(i) == value,
-                |&i| Self::hash_iter(&self.hasher, self.rangevec.lookup_slice(i)),
-            )
+        #[cfg(not(feature = "sync"))]
+        let entry = self.map.entry(
+            hash,
+            |&i| self.rangevec.lookup_slice(i) == value,
+            |&i| Self::hash_iter(&self.hasher, self.rangevec.lookup_slice(i)),
+        );
+        #[cfg(feature = "sync")]
+        let entry = self.map.entry_mut(
+            hash,
+            |&i| self.rangevec.lookup_slice(i) == value,
+            |&i| Self::hash_iter(&self.hasher, self.rangevec.lookup_slice(i)),
+        );
+        let id = *entry
             .or_insert_with(|| {
                 let range = self.rangevec.vec.push_owned_slice_mut(value);
                 self.rangevec.push_range_mut(range)
@@ -508,6 +530,7 @@ where
     /// See also [`intern_array_mut()`](Self::intern_array_mut), which is more
     /// efficient if you hold a mutable reference to this arena as it avoids
     /// acquiring locks.
+    #[cfg(feature = "sync")]
     pub fn intern_array<const N: usize>(&self, value: [T; N]) -> InternedSlice<T> {
         #[cfg(feature = "debug")]
         self.references.fetch_add(1, atomic::Ordering::Relaxed);
@@ -538,16 +561,24 @@ where
     /// reference to this arena.
     pub fn intern_array_mut<const N: usize>(&mut self, value: [T; N]) -> InternedSlice<T> {
         #[cfg(feature = "debug")]
-        self.references.fetch_add(1, atomic::Ordering::Relaxed);
+        {
+            *self.references.get_mut() += 1;
+        }
 
         let hash = self.hash_slice(&value);
-        let id = *self
-            .map
-            .entry_mut(
-                hash,
-                |&i| self.rangevec.lookup_slice(i) == value,
-                |&i| Self::hash_iter(&self.hasher, self.rangevec.lookup_slice(i)),
-            )
+        #[cfg(not(feature = "sync"))]
+        let entry = self.map.entry(
+            hash,
+            |&i| self.rangevec.lookup_slice(i) == value,
+            |&i| Self::hash_iter(&self.hasher, self.rangevec.lookup_slice(i)),
+        );
+        #[cfg(feature = "sync")]
+        let entry = self.map.entry_mut(
+            hash,
+            |&i| self.rangevec.lookup_slice(i) == value,
+            |&i| Self::hash_iter(&self.hasher, self.rangevec.lookup_slice(i)),
+        );
+        let id = *entry
             .or_insert_with(|| {
                 let range = self.rangevec.vec.push_array_mut(value);
                 self.rangevec.push_range_mut(range)
@@ -570,6 +601,7 @@ where
     /// This function requires the iterator length to be correct (and not to
     /// change upon cloning). This is akin to the nightly-only
     /// [`TrustedLen`](std::iter::TrustedLen) trait.
+    #[cfg(feature = "sync")]
     pub unsafe fn intern_iter(
         &self,
         value: impl ExactSizeIterator<Item = T> + Clone,
@@ -618,21 +650,33 @@ where
         value: impl ExactSizeIterator<Item = T> + Clone,
     ) -> InternedSlice<T> {
         #[cfg(feature = "debug")]
-        self.references.fetch_add(1, atomic::Ordering::Relaxed);
+        {
+            *self.references.get_mut() += 1;
+        }
 
         let hash = Self::hash_iter(&self.hasher, value.clone());
 
-        let id = *self
-            .map
-            .entry_mut(
-                hash,
-                |&i| {
-                    let lhs = self.rangevec.lookup_slice(i).iter();
-                    let rhs = value.clone();
-                    Self::iter_eq(lhs, rhs)
-                },
-                |&i| Self::hash_iter(&self.hasher, self.rangevec.lookup_slice(i)),
-            )
+        #[cfg(not(feature = "sync"))]
+        let entry = self.map.entry(
+            hash,
+            |&i| {
+                let lhs = self.rangevec.lookup_slice(i).iter();
+                let rhs = value.clone();
+                Self::iter_eq(lhs, rhs)
+            },
+            |&i| Self::hash_iter(&self.hasher, self.rangevec.lookup_slice(i)),
+        );
+        #[cfg(feature = "sync")]
+        let entry = self.map.entry_mut(
+            hash,
+            |&i| {
+                let lhs = self.rangevec.lookup_slice(i).iter();
+                let rhs = value.clone();
+                Self::iter_eq(lhs, rhs)
+            },
+            |&i| Self::hash_iter(&self.hasher, self.rangevec.lookup_slice(i)),
+        );
+        let id = *entry
             .or_insert_with(|| {
                 // SAFETY: The caller ensures that the iterator length is correct.
                 let range = unsafe { self.rangevec.vec.push_contiguous_mut(value) };
@@ -647,13 +691,20 @@ where
     #[cfg(feature = "raw")]
     pub fn push_owned_mut(&mut self, value: Vec<T>) -> InternedSlice<T> {
         #[cfg(feature = "debug")]
-        self.references.fetch_add(1, atomic::Ordering::Relaxed);
+        {
+            *self.references.get_mut() += 1;
+        }
 
         let hash = self.hash_slice(&value);
 
         let range = self.rangevec.vec.push_owned_slice_mut(value);
         let id = self.rangevec.push_range_mut(range);
 
+        #[cfg(not(feature = "sync"))]
+        self.map.insert_unique(hash, id, |&i| {
+            Self::hash_iter(&self.hasher, self.rangevec.lookup_slice(i))
+        });
+        #[cfg(feature = "sync")]
         self.map.insert_unique_mut(hash, id, |&i| {
             Self::hash_iter(&self.hasher, self.rangevec.lookup_slice(i))
         });
@@ -665,13 +716,20 @@ where
     #[cfg(feature = "raw")]
     pub fn push_array_mut<const N: usize>(&mut self, value: [T; N]) -> InternedSlice<T> {
         #[cfg(feature = "debug")]
-        self.references.fetch_add(1, atomic::Ordering::Relaxed);
+        {
+            *self.references.get_mut() += 1;
+        }
 
         let hash = self.hash_slice(&value);
 
         let range = self.rangevec.vec.push_array_mut(value);
         let id = self.rangevec.push_range_mut(range);
 
+        #[cfg(not(feature = "sync"))]
+        self.map.insert_unique(hash, id, |&i| {
+            Self::hash_iter(&self.hasher, self.rangevec.lookup_slice(i))
+        });
+        #[cfg(feature = "sync")]
         self.map.insert_unique_mut(hash, id, |&i| {
             Self::hash_iter(&self.hasher, self.rangevec.lookup_slice(i))
         });
@@ -706,7 +764,9 @@ where
         value: impl ExactSizeIterator<Item = T>,
     ) -> InternedSlice<T> {
         #[cfg(feature = "debug")]
-        self.references.fetch_add(1, atomic::Ordering::Relaxed);
+        {
+            *self.references.get_mut() += 1;
+        }
 
         // SAFETY: The caller ensures that the iterator length is correct.
         let range = unsafe { self.rangevec.vec.push_contiguous_mut(value) };
@@ -714,6 +774,11 @@ where
 
         let hash = self.hash_slice(&self.rangevec.vec[range]);
 
+        #[cfg(not(feature = "sync"))]
+        self.map.insert_unique(hash, id, |&i| {
+            Self::hash_iter(&self.hasher, self.rangevec.lookup_slice(i))
+        });
+        #[cfg(feature = "sync")]
         self.map.insert_unique_mut(hash, id, |&i| {
             Self::hash_iter(&self.hasher, self.rangevec.lookup_slice(i))
         });
@@ -735,6 +800,7 @@ where
     ///
     /// See also [`intern_mut()`](Self::intern_mut), which is more efficient if
     /// you hold a mutable reference to this arena as it avoids acquiring locks.
+    #[cfg(feature = "sync")]
     pub fn intern(&self, value: &[T]) -> InternedSlice<T> {
         #[cfg(feature = "debug")]
         self.references.fetch_add(1, atomic::Ordering::Relaxed);
@@ -768,16 +834,24 @@ where
     /// this arena.
     pub fn intern_mut(&mut self, value: &[T]) -> InternedSlice<T> {
         #[cfg(feature = "debug")]
-        self.references.fetch_add(1, atomic::Ordering::Relaxed);
+        {
+            *self.references.get_mut() += 1;
+        }
 
         let hash = self.hash_slice(value);
-        let id = *self
-            .map
-            .entry_mut(
-                hash,
-                |&i| self.rangevec.lookup_slice(i) == value,
-                |&i| Self::hash_iter(&self.hasher, self.rangevec.lookup_slice(i)),
-            )
+        #[cfg(not(feature = "sync"))]
+        let entry = self.map.entry(
+            hash,
+            |&i| self.rangevec.lookup_slice(i) == value,
+            |&i| Self::hash_iter(&self.hasher, self.rangevec.lookup_slice(i)),
+        );
+        #[cfg(feature = "sync")]
+        let entry = self.map.entry_mut(
+            hash,
+            |&i| self.rangevec.lookup_slice(i) == value,
+            |&i| Self::hash_iter(&self.hasher, self.rangevec.lookup_slice(i)),
+        );
+        let id = *entry
             .or_insert_with(|| {
                 let range = self.rangevec.vec.push_slice_mut(value);
                 self.rangevec.push_range_mut(range)
@@ -800,13 +874,20 @@ where
     /// interned.
     pub(crate) fn push(&mut self, value: &[T]) -> u32 {
         #[cfg(feature = "debug")]
-        self.references.fetch_add(1, atomic::Ordering::Relaxed);
+        {
+            *self.references.get_mut() += 1;
+        }
 
         let hash = self.hash_slice(value);
 
         let range = self.rangevec.vec.push_slice_mut(value);
         let id = self.rangevec.push_range_mut(range);
 
+        #[cfg(not(feature = "sync"))]
+        self.map.insert_unique(hash, id, |&i| {
+            Self::hash_iter(&self.hasher, self.rangevec.lookup_slice(i))
+        });
+        #[cfg(feature = "sync")]
         self.map.insert_unique_mut(hash, id, |&i| {
             Self::hash_iter(&self.hasher, self.rangevec.lookup_slice(i))
         });
@@ -831,6 +912,7 @@ where
     /// See also [`intern_copy_mut()`](Self::intern_copy_mut), which is more
     /// efficient if you hold a mutable reference to this arena as it avoids
     /// acquiring locks.
+    #[cfg(feature = "sync")]
     pub fn intern_copy(&self, value: &[T]) -> InternedSlice<T> {
         #[cfg(feature = "debug")]
         self.references.fetch_add(1, atomic::Ordering::Relaxed);
@@ -866,7 +948,9 @@ where
     /// reference to this arena.
     pub fn intern_copy_mut(&mut self, value: &[T]) -> InternedSlice<T> {
         #[cfg(feature = "debug")]
-        self.references.fetch_add(1, atomic::Ordering::Relaxed);
+        {
+            *self.references.get_mut() += 1;
+        }
 
         let hash = self.hash_slice(value);
         let id = *self
@@ -892,13 +976,20 @@ where
     #[cfg(feature = "raw")]
     pub fn push_copy_mut(&mut self, value: &[T]) -> u32 {
         #[cfg(feature = "debug")]
-        self.references.fetch_add(1, atomic::Ordering::Relaxed);
+        {
+            *self.references.get_mut() += 1;
+        }
 
         let hash = self.hash_slice(value);
 
         let range = self.rangevec.vec.push_slice_copy_mut(value);
         let id = self.rangevec.push_range_mut(range);
 
+        #[cfg(not(feature = "sync"))]
+        self.map.insert_unique(hash, id, |&i| {
+            Self::hash_iter(&self.hasher, self.rangevec.lookup_slice(i))
+        });
+        #[cfg(feature = "sync")]
         self.map.insert_unique_mut(hash, id, |&i| {
             Self::hash_iter(&self.hasher, self.rangevec.lookup_slice(i))
         });
@@ -1056,16 +1147,7 @@ where
             .next_element()?
             .ok_or_else(|| A::Error::invalid_length(1, &self))?;
 
-        let mut arena = ArenaSlice {
-            rangevec: RangeVec {
-                vec: AppendVec::with_capacity(values.len()),
-                ranges: AppendVec::with_capacity(sizes.len()),
-            },
-            map: DashTable::with_capacity(sizes.len()),
-            hasher: DefaultHashBuilder::default(),
-            #[cfg(feature = "debug")]
-            references: AtomicUsize::new(0),
-        };
+        let mut arena = ArenaSlice::with_capacity(sizes.len(), values.len());
 
         let mut start = 0;
         for size in sizes {
@@ -1197,16 +1279,7 @@ mod delta {
                 .next_element()?
                 .ok_or_else(|| A::Error::invalid_length(1, &self))?;
 
-            let mut arena = ArenaSlice {
-                rangevec: RangeVec {
-                    vec: AppendVec::with_capacity(values.len()),
-                    ranges: AppendVec::with_capacity(sizes.len()),
-                },
-                map: DashTable::with_capacity(sizes.len()),
-                hasher: DefaultHashBuilder::default(),
-                #[cfg(feature = "debug")]
-                references: AtomicUsize::new(0),
-            };
+            let mut arena = ArenaSlice::with_capacity(sizes.len(), values.len());
 
             let mut acc = Accum::default();
             let mut start = 0;
