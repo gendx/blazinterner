@@ -73,8 +73,9 @@ where
     /// where each item is additionally transformed according to the given
     /// function `f`.
     ///
-    /// The transformation function must be injective, i.e. different inputs
-    /// must map to different outputs.
+    /// The transformation function should be injective, i.e. different inputs
+    /// should map to different outputs. Otherwise a value may appear twice in
+    /// the resulting arena
     pub fn map2(&self, mapping: &ReverseMapping, f: impl Fn(&T) -> Storage) -> Self {
         let mut arena = Arena::with_capacity(mapping.len());
         for i in mapping.iter() {
@@ -181,8 +182,9 @@ where
     /// where each slice element is additionally transformed according to
     /// the given function `f`.
     ///
-    /// The transformation function must be injective, i.e. different inputs
-    /// must map to different outputs.
+    /// The transformation function should be injective, i.e. different inputs
+    /// should map to different outputs. Otherwise a value may appear twice in
+    /// the resulting arena
     pub fn map2(&self, mapping: &ReverseMapping, f: impl Fn(&T) -> T) -> Self {
         let mut arena = ArenaSlice::with_capacity(mapping.len(), self.items());
         for i in mapping.iter() {

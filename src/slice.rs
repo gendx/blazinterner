@@ -688,6 +688,9 @@ where
 
     /// Unconditionally push a value, without validating that it's already
     /// interned.
+    ///
+    /// Calling this function multiple times with the same value doesn't violate
+    /// safety, but the value will be stored multiple times in the arena.
     #[cfg(feature = "raw")]
     pub fn push_owned_mut(&mut self, value: Vec<T>) -> InternedSlice<T> {
         #[cfg(feature = "debug")]
@@ -713,6 +716,9 @@ where
 
     /// Unconditionally push a value, without validating that it's already
     /// interned.
+    ///
+    /// Calling this function multiple times with the same value doesn't violate
+    /// safety, but the value will be stored multiple times in the arena.
     #[cfg(feature = "raw")]
     pub fn push_array_mut<const N: usize>(&mut self, value: [T; N]) -> InternedSlice<T> {
         #[cfg(feature = "debug")]
@@ -739,6 +745,9 @@ where
     /// Unconditionally push an iterator as a single contiguous value, without
     /// validating that it's already interned.
     ///
+    /// Calling this function multiple times with the same value doesn't violate
+    /// safety, but the value will be stored multiple times in the arena.
+    ///
     /// # Safety
     ///
     /// This function requires the iterator length to be correct. This is akin
@@ -754,6 +763,9 @@ where
 
     /// Unconditionally push an iterator as a single contiguous value, without
     /// validating that it's already interned.
+    ///
+    /// Calling this function multiple times with the same value doesn't violate
+    /// safety, but the value will be stored multiple times in the arena.
     ///
     /// # Safety
     ///
@@ -863,6 +875,9 @@ where
     /// Unconditionally push a value, without validating that it's already
     /// interned.
     ///
+    /// Calling this function multiple times with the same value doesn't violate
+    /// safety, but the value will be stored multiple times in the arena.
+    ///
     /// If `T` is [`Copy`], calling [`push_copy_mut()`](Self::push_copy_mut) may
     /// be more efficient.
     #[cfg(feature = "raw")]
@@ -872,6 +887,9 @@ where
 
     /// Unconditionally push a value, without validating that it's already
     /// interned.
+    ///
+    /// Calling this function multiple times with the same value doesn't violate
+    /// safety, but the value will be stored multiple times in the arena.
     pub(crate) fn push(&mut self, value: &[T]) -> u32 {
         #[cfg(feature = "debug")]
         {
@@ -970,6 +988,9 @@ where
 
     /// Unconditionally push a value, without validating that it's already
     /// interned.
+    ///
+    /// Calling this function multiple times with the same value doesn't violate
+    /// safety, but the value will be stored multiple times in the arena.
     ///
     /// If `T` is only [`Clone`], you can call [`push_mut()`](Self::push_mut)
     /// instead.
@@ -1300,6 +1321,56 @@ mod delta {
                 inner: arena,
                 _phantom: PhantomData,
             })
+        }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_intern_mut_lookup() {
+        let mut arena: ArenaSlice<u32> = ArenaSlice::default();
+        for i in 0..100 {
+            let slice = vec![i; i as usize];
+            assert_eq!(arena.intern_mut(&slice).id, i);
+        }
+        for i in 0..100 {
+            let slice = arena.lookup(InternedSlice::new(i));
+            let expected = vec![i; i as usize];
+            assert_eq!(slice, &expected);
+        }
+    }
+
+    #[cfg(all(feature = "raw", not(miri)))]
+    const NUM_ITERS: u32 = 100;
+    #[cfg(all(feature = "raw", miri))]
+    const NUM_ITERS: u32 = 20;
+    #[cfg(all(feature = "raw", not(miri)))]
+    const NUM_VALUES: u32 = 50;
+    #[cfg(all(feature = "raw", miri))]
+    const NUM_VALUES: u32 = 10;
+
+    #[cfg(feature = "raw")]
+    #[test]
+    fn test_push_mut_same_value_works() {
+        let mut arena: ArenaSlice<u32> = ArenaSlice::default();
+        for i in 0..NUM_ITERS {
+            for j in 0..NUM_VALUES {
+                let slice = vec![j; j as usize];
+                assert_eq!(arena.push_mut(&slice), i * NUM_VALUES + j);
+                let id = arena.intern_mut(&slice).id;
+                assert_eq!(id % NUM_VALUES, j);
+                assert!(id / NUM_VALUES <= i);
+            }
+        }
+        for i in 0..NUM_ITERS {
+            for j in 0..NUM_VALUES {
+                let slice = arena.lookup(InternedSlice::new(i * NUM_VALUES + j));
+                let expected = vec![j; j as usize];
+                assert_eq!(slice, &expected);
+            }
         }
     }
 }
