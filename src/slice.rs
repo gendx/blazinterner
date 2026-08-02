@@ -1,5 +1,3 @@
-#[cfg(feature = "serde")]
-use super::U32Visitor;
 #[cfg(feature = "sync")]
 use appendvec::AppendVec;
 #[cfg(feature = "sync")]
@@ -160,7 +158,7 @@ impl<'de, T> Deserialize<'de> for InternedSlice<T> {
     where
         D: Deserializer<'de>,
     {
-        let id = deserializer.deserialize_u32(U32Visitor)?;
+        let id = u32::deserialize(deserializer)?;
         Ok(Self {
             id,
             _phantom: PhantomData,

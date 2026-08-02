@@ -187,89 +187,11 @@ impl<'de, T: ?Sized, Storage> Deserialize<'de> for Interned<T, Storage> {
     where
         D: Deserializer<'de>,
     {
-        let id = deserializer.deserialize_u32(U32Visitor)?;
+        let id = u32::deserialize(deserializer)?;
         Ok(Self {
             id,
             _phantom: PhantomData,
         })
-    }
-}
-
-#[cfg(feature = "serde")]
-struct U32Visitor;
-
-#[cfg(feature = "serde")]
-impl Visitor<'_> for U32Visitor {
-    type Value = u32;
-
-    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-        formatter.write_str("an integer between 0 and 2^32")
-    }
-
-    fn visit_u8<E>(self, value: u8) -> Result<Self::Value, E>
-    where
-        E: serde::de::Error,
-    {
-        Ok(u32::from(value))
-    }
-
-    fn visit_u16<E>(self, value: u16) -> Result<Self::Value, E>
-    where
-        E: serde::de::Error,
-    {
-        Ok(u32::from(value))
-    }
-
-    fn visit_u32<E>(self, value: u32) -> Result<Self::Value, E>
-    where
-        E: serde::de::Error,
-    {
-        Ok(value)
-    }
-
-    fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E>
-    where
-        E: serde::de::Error,
-    {
-        value
-            .try_into()
-            .map_err(|_| E::custom(format!("u32 out of range: {}", value)))
-    }
-
-    fn visit_i8<E>(self, value: i8) -> Result<Self::Value, E>
-    where
-        E: serde::de::Error,
-    {
-        value
-            .try_into()
-            .map_err(|_| E::custom(format!("u32 out of range: {}", value)))
-    }
-
-    fn visit_i16<E>(self, value: i16) -> Result<Self::Value, E>
-    where
-        E: serde::de::Error,
-    {
-        value
-            .try_into()
-            .map_err(|_| E::custom(format!("u32 out of range: {}", value)))
-    }
-
-    fn visit_i32<E>(self, value: i32) -> Result<Self::Value, E>
-    where
-        E: serde::de::Error,
-    {
-        value
-            .try_into()
-            .map_err(|_| E::custom(format!("u32 out of range: {}", value)))
-    }
-
-    fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E>
-    where
-        E: serde::de::Error,
-    {
-        value
-            .try_into()
-            .map_err(|_| E::custom(format!("u32 out of range: {}", value)))
     }
 }
 
