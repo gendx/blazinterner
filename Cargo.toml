@@ -28,7 +28,7 @@ sync = ["dep:appendvec", "dep:dashtable"]
 [dependencies]
 appendvec = { optional = true, version = "0.1.5" }
 bit-set = { optional = true, version = "0.11.1" }
-dashtable = { optional = true, version = "0.1.2" }
+dashtable = { optional = true, version = "0.2.0" }
 get-size2 = { optional = true, version = "0.10.3", features = ["derive"] }
 hashbrown = "0.17.1"
 serde = { optional = true, version = "1.0.229", features = ["derive"] }

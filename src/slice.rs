@@ -324,6 +324,9 @@ where
     ///
     /// Otherwise, this simply returns [`None`] without adding the value to this
     /// arena.
+    ///
+    /// See also [`find_mut()`](Self::find_mut), which is more efficient if you
+    /// hold a mutable reference to this arena as it avoids acquiring locks.
     pub fn find(&self, value: &[T]) -> Option<InternedSlice<T>> {
         let hash = self.hash_slice(value);
         self.map
@@ -332,6 +335,35 @@ where
                 id: *id,
                 _phantom: PhantomData,
             })
+    }
+
+    /// Returns the given value's [`InternedSlice`] handle if it is already
+    /// interned.
+    ///
+    /// Otherwise, this simply returns [`None`] without adding the value to this
+    /// arena.
+    ///
+    /// Contrary to [`find()`](Self::find), no locks are held internally because
+    /// this function already takes an exclusive mutable reference to this
+    /// arena.
+    pub fn find_mut(&mut self, value: &[T]) -> Option<InternedSlice<T>> {
+        let hash = self.hash_slice(value);
+        #[cfg(not(feature = "sync"))]
+        return self
+            .map
+            .find(hash, |&i| self.lookup_slice(i) == value)
+            .map(|id| InternedSlice {
+                id: *id,
+                _phantom: PhantomData,
+            });
+        #[cfg(feature = "sync")]
+        return self
+            .map
+            .find_mut(hash, |&i| self.rangevec.lookup_slice(i) == value)
+            .map(|id| InternedSlice {
+                id: *id,
+                _phantom: PhantomData,
+            });
     }
 }
 

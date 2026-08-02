@@ -269,11 +269,37 @@ impl ArenaStr {
     ///
     /// Otherwise, this simply returns [`None`] without adding the string to
     /// this arena.
+    ///
+    /// See also [`find_mut()`](Self::find_mut), which is more efficient if you
+    /// hold a mutable reference to this arena as it avoids acquiring locks.
     pub fn find(&self, value: &str) -> Option<InternedStr> {
         let hash = self.hasher.hash_one(value);
         self.map
             .find(hash, |&i| self.lookup_str(i) == value)
             .map(|id| InternedStr(*id))
+    }
+
+    /// Returns the given string's [`InternedStr`] handle if it is already
+    /// interned.
+    ///
+    /// Otherwise, this simply returns [`None`] without adding the string to
+    /// this arena.
+    ///
+    /// Contrary to [`find()`](Self::find), no locks are held internally because
+    /// this function already takes an exclusive mutable reference to this
+    /// arena.
+    pub fn find_mut(&mut self, value: &str) -> Option<InternedStr> {
+        let hash = self.hasher.hash_one(value);
+        #[cfg(not(feature = "sync"))]
+        return self
+            .map
+            .find(hash, |&i| self.lookup_str(i) == value)
+            .map(|id| InternedStr(*id));
+        #[cfg(feature = "sync")]
+        return self
+            .map
+            .find_mut(hash, |&i| self.rangevec.lookup_str(i) == value)
+            .map(|id| InternedStr(*id));
     }
 
     /// Unconditionally push a value, without validating that it's already
