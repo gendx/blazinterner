@@ -1,5 +1,6 @@
 #[cfg(feature = "serde")]
 use super::U32Visitor;
+#[cfg(feature = "sync")]
 use appendvec::AppendVec;
 #[cfg(feature = "sync")]
 use dashtable::DashTable;
@@ -168,7 +169,13 @@ impl<'de, T> Deserialize<'de> for InternedSlice<T> {
 }
 
 struct RangeVec<T> {
+    #[cfg(not(feature = "sync"))]
+    vec: Vec<T>,
+    #[cfg(feature = "sync")]
     vec: AppendVec<T>,
+    #[cfg(not(feature = "sync"))]
+    ranges: Vec<CopyRangeU32>,
+    #[cfg(feature = "sync")]
     ranges: AppendVec<CopyRangeU32>,
 }
 
@@ -201,6 +208,13 @@ impl<T> RangeVec<T> {
         assert!(range.end <= u32::MAX as usize);
         let range = range.start as u32..range.end as u32;
 
+        #[cfg(not(feature = "sync"))]
+        let id = {
+            let id = self.ranges.len();
+            self.ranges.push(range.into());
+            id
+        };
+        #[cfg(feature = "sync")]
         let id = self.ranges.push_mut(range.into());
         assert!(id <= u32::MAX as usize);
         id as u32
@@ -238,6 +252,12 @@ impl<T> ArenaSlice<T> {
     /// number of slices, totalling the given number of items of type `T`.
     pub fn with_capacity(slices: usize, items: usize) -> Self {
         Self {
+            #[cfg(not(feature = "sync"))]
+            rangevec: RangeVec {
+                vec: Vec::with_capacity(items),
+                ranges: Vec::with_capacity(slices),
+            },
+            #[cfg(feature = "sync")]
             rangevec: RangeVec {
                 vec: AppendVec::with_capacity(items),
                 ranges: AppendVec::with_capacity(slices),
@@ -338,6 +358,12 @@ where
 impl<T> Default for ArenaSlice<T> {
     fn default() -> Self {
         Self {
+            #[cfg(not(feature = "sync"))]
+            rangevec: RangeVec {
+                vec: Vec::new(),
+                ranges: Vec::new(),
+            },
+            #[cfg(feature = "sync")]
             rangevec: RangeVec {
                 vec: AppendVec::new(),
                 ranges: AppendVec::new(),
@@ -515,6 +541,16 @@ where
         );
         let id = *entry
             .or_insert_with(|| {
+                #[cfg(not(feature = "sync"))]
+                let range = {
+                    let start = self.rangevec.vec.len();
+                    let mut value = value;
+                    self.rangevec.vec.append(&mut value);
+                    drop(value);
+                    let end = self.rangevec.vec.len();
+                    start..end
+                };
+                #[cfg(feature = "sync")]
                 let range = self.rangevec.vec.push_owned_slice_mut(value);
                 self.rangevec.push_range_mut(range)
             })
@@ -580,6 +616,14 @@ where
         );
         let id = *entry
             .or_insert_with(|| {
+                #[cfg(not(feature = "sync"))]
+                let range = {
+                    let start = self.rangevec.vec.len();
+                    self.rangevec.vec.extend(value);
+                    let end = self.rangevec.vec.len();
+                    start..end
+                };
+                #[cfg(feature = "sync")]
                 let range = self.rangevec.vec.push_array_mut(value);
                 self.rangevec.push_range_mut(range)
             })
@@ -678,7 +722,15 @@ where
         );
         let id = *entry
             .or_insert_with(|| {
+                #[cfg(not(feature = "sync"))]
+                let range = {
+                    let start = self.rangevec.vec.len();
+                    self.rangevec.vec.extend(value);
+                    let end = self.rangevec.vec.len();
+                    start..end
+                };
                 // SAFETY: The caller ensures that the iterator length is correct.
+                #[cfg(feature = "sync")]
                 let range = unsafe { self.rangevec.vec.push_contiguous_mut(value) };
                 self.rangevec.push_range_mut(range)
             })
@@ -700,6 +752,16 @@ where
 
         let hash = self.hash_slice(&value);
 
+        #[cfg(not(feature = "sync"))]
+        let range = {
+            let start = self.rangevec.vec.len();
+            let mut value = value;
+            self.rangevec.vec.append(&mut value);
+            drop(value);
+            let end = self.rangevec.vec.len();
+            start..end
+        };
+        #[cfg(feature = "sync")]
         let range = self.rangevec.vec.push_owned_slice_mut(value);
         let id = self.rangevec.push_range_mut(range);
 
@@ -728,6 +790,14 @@ where
 
         let hash = self.hash_slice(&value);
 
+        #[cfg(not(feature = "sync"))]
+        let range = {
+            let start = self.rangevec.vec.len();
+            self.rangevec.vec.extend(value);
+            let end = self.rangevec.vec.len();
+            start..end
+        };
+        #[cfg(feature = "sync")]
         let range = self.rangevec.vec.push_array_mut(value);
         let id = self.rangevec.push_range_mut(range);
 
@@ -780,7 +850,15 @@ where
             *self.references.get_mut() += 1;
         }
 
+        #[cfg(not(feature = "sync"))]
+        let range = {
+            let start = self.rangevec.vec.len();
+            self.rangevec.vec.extend(value);
+            let end = self.rangevec.vec.len();
+            start..end
+        };
         // SAFETY: The caller ensures that the iterator length is correct.
+        #[cfg(feature = "sync")]
         let range = unsafe { self.rangevec.vec.push_contiguous_mut(value) };
         let id = self.rangevec.push_range_mut(range.clone());
 
@@ -865,6 +943,14 @@ where
         );
         let id = *entry
             .or_insert_with(|| {
+                #[cfg(not(feature = "sync"))]
+                let range = {
+                    let start = self.rangevec.vec.len();
+                    self.rangevec.vec.extend_from_slice(value);
+                    let end = self.rangevec.vec.len();
+                    start..end
+                };
+                #[cfg(feature = "sync")]
                 let range = self.rangevec.vec.push_slice_mut(value);
                 self.rangevec.push_range_mut(range)
             })
@@ -898,6 +984,14 @@ where
 
         let hash = self.hash_slice(value);
 
+        #[cfg(not(feature = "sync"))]
+        let range = {
+            let start = self.rangevec.vec.len();
+            self.rangevec.vec.extend_from_slice(value);
+            let end = self.rangevec.vec.len();
+            start..end
+        };
+        #[cfg(feature = "sync")]
         let range = self.rangevec.vec.push_slice_mut(value);
         let id = self.rangevec.push_range_mut(range);
 
@@ -979,6 +1073,14 @@ where
                 |&i| Self::hash_iter(&self.hasher, self.rangevec.lookup_slice(i)),
             )
             .or_insert_with(|| {
+                #[cfg(not(feature = "sync"))]
+                let range = {
+                    let start = self.rangevec.vec.len();
+                    self.rangevec.vec.extend_from_slice(value);
+                    let end = self.rangevec.vec.len();
+                    start..end
+                };
+                #[cfg(feature = "sync")]
                 let range = self.rangevec.vec.push_slice_copy_mut(value);
                 self.rangevec.push_range_mut(range)
             })
@@ -1003,6 +1105,14 @@ where
 
         let hash = self.hash_slice(value);
 
+        #[cfg(not(feature = "sync"))]
+        let range = {
+            let start = self.rangevec.vec.len();
+            self.rangevec.vec.extend_from_slice(value);
+            let end = self.rangevec.vec.len();
+            start..end
+        };
+        #[cfg(feature = "sync")]
         let range = self.rangevec.vec.push_slice_copy_mut(value);
         let id = self.rangevec.push_range_mut(range);
 
@@ -1063,6 +1173,9 @@ where
 
 #[cfg(feature = "serde")]
 struct RangeWrapper<'a> {
+    #[cfg(not(feature = "sync"))]
+    ranges: &'a [CopyRangeU32],
+    #[cfg(feature = "sync")]
     ranges: &'a AppendVec<CopyRangeU32>,
     ranges_len: Cell<u32>,
     total_len: Cell<u32>,

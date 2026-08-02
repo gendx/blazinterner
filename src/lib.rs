@@ -39,6 +39,7 @@ mod mapping;
 mod slice;
 mod str;
 
+#[cfg(feature = "sync")]
 use appendvec::AppendVec;
 #[cfg(feature = "sync")]
 use dashtable::DashTable;
@@ -280,6 +281,9 @@ impl Visitor<'_> for U32Visitor {
 /// Trait`](https://doc.rust-lang.org/stable/std/keyword.dyn.html), you need to
 /// specify a [`Sized`] storage type, such as `Box<dyn Trait>`.
 pub struct Arena<T: ?Sized, Storage = T> {
+    #[cfg(not(feature = "sync"))]
+    vec: Vec<Storage>,
+    #[cfg(feature = "sync")]
     vec: AppendVec<Storage>,
     #[cfg(not(feature = "sync"))]
     map: HashTable<u32>,
@@ -311,6 +315,9 @@ impl<T: ?Sized, Storage> Arena<T, Storage> {
     /// values of type `T`.
     pub fn with_capacity(len: usize) -> Self {
         Self {
+            #[cfg(not(feature = "sync"))]
+            vec: Vec::with_capacity(len),
+            #[cfg(feature = "sync")]
             vec: AppendVec::with_capacity(len),
             #[cfg(not(feature = "sync"))]
             map: HashTable::with_capacity(len),
@@ -401,6 +408,9 @@ where
 impl<T: ?Sized, Storage> Default for Arena<T, Storage> {
     fn default() -> Self {
         Self {
+            #[cfg(not(feature = "sync"))]
+            vec: Vec::new(),
+            #[cfg(feature = "sync")]
             vec: AppendVec::new(),
             #[cfg(not(feature = "sync"))]
             map: HashTable::new(),
@@ -551,6 +561,13 @@ where
         let id = *entry
             .or_insert_with(|| {
                 let x: Storage = value.into();
+                #[cfg(not(feature = "sync"))]
+                let id = {
+                    let id = self.vec.len();
+                    self.vec.push(x);
+                    id
+                };
+                #[cfg(feature = "sync")]
                 let id = self.vec.push_mut(x);
                 assert!(id <= u32::MAX as usize);
                 id as u32
@@ -572,6 +589,13 @@ where
 
         let hash = self.hasher.hash_one(value.borrow());
 
+        #[cfg(not(feature = "sync"))]
+        let id = {
+            let id = self.vec.len();
+            self.vec.push(value);
+            id
+        };
+        #[cfg(feature = "sync")]
         let id = self.vec.push_mut(value);
         assert!(id <= u32::MAX as usize);
         let id = id as u32;

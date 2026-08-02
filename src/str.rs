@@ -1,4 +1,5 @@
 use crate::CopyRangeU32;
+#[cfg(feature = "sync")]
 use appendvec::{AppendStr, AppendVec};
 #[cfg(feature = "sync")]
 use dashtable::DashTable;
@@ -72,7 +73,13 @@ impl InternedStr {
 }
 
 struct RangeVecStr {
+    #[cfg(not(feature = "sync"))]
+    vec: String,
+    #[cfg(feature = "sync")]
     vec: AppendStr,
+    #[cfg(not(feature = "sync"))]
+    ranges: Vec<CopyRangeU32>,
+    #[cfg(feature = "sync")]
     ranges: AppendVec<CopyRangeU32>,
 }
 
@@ -80,7 +87,10 @@ impl RangeVecStr {
     fn lookup_bytes(&self, id: u32) -> &[u8] {
         let range = self.ranges[id as usize];
         let range = range.start as usize..range.end as usize;
-        self.vec.get_bytes(range)
+        #[cfg(not(feature = "sync"))]
+        return &self.vec.as_bytes()[range];
+        #[cfg(feature = "sync")]
+        return self.vec.get_bytes(range);
     }
 
     fn lookup_str(&self, id: u32) -> &str {
@@ -96,9 +106,14 @@ impl RangeVecStr {
     }
 
     fn iter_bytes(&self) -> impl ExactSizeIterator<Item = &[u8]> {
-        self.ranges
-            .iter()
-            .map(|&range| self.vec.get_bytes(range.start as usize..range.end as usize))
+        #[cfg(not(feature = "sync"))]
+        let bytes = self.vec.as_bytes();
+        self.ranges.iter().map(|&range| {
+            #[cfg(not(feature = "sync"))]
+            return &bytes[range.start as usize..range.end as usize];
+            #[cfg(feature = "sync")]
+            return self.vec.get_bytes(range.start as usize..range.end as usize);
+        })
     }
 
     #[cfg(feature = "sync")]
@@ -114,11 +129,26 @@ impl RangeVecStr {
     }
 
     fn push_str_mut(&mut self, value: &str) -> u32 {
+        #[cfg(not(feature = "sync"))]
+        let range = {
+            let start = self.vec.len();
+            self.vec.push_str(value);
+            let end = self.vec.len();
+            start..end
+        };
+        #[cfg(feature = "sync")]
         let range = self.vec.push_str_mut(value);
         assert!(range.start <= u32::MAX as usize);
         assert!(range.end <= u32::MAX as usize);
         let range = range.start as u32..range.end as u32;
 
+        #[cfg(not(feature = "sync"))]
+        let id = {
+            let id = self.ranges.len();
+            self.ranges.push(range.into());
+            id
+        };
+        #[cfg(feature = "sync")]
         let id = self.ranges.push_mut(range.into());
         assert!(id <= u32::MAX as usize);
         id as u32
@@ -153,6 +183,12 @@ impl ArenaStr {
     /// number of strings, totalling the given number of bytes.
     pub fn with_capacity(strings: usize, bytes: usize) -> Self {
         Self {
+            #[cfg(not(feature = "sync"))]
+            rangevec: RangeVecStr {
+                vec: String::with_capacity(bytes),
+                ranges: Vec::with_capacity(strings),
+            },
+            #[cfg(feature = "sync")]
             rangevec: RangeVecStr {
                 vec: AppendStr::with_capacity(bytes),
                 ranges: AppendVec::with_capacity(strings),
@@ -254,6 +290,12 @@ impl ArenaStr {
 impl Default for ArenaStr {
     fn default() -> Self {
         Self {
+            #[cfg(not(feature = "sync"))]
+            rangevec: RangeVecStr {
+                vec: String::new(),
+                ranges: Vec::new(),
+            },
+            #[cfg(feature = "sync")]
             rangevec: RangeVecStr {
                 vec: AppendStr::new(),
                 ranges: AppendVec::new(),
@@ -453,6 +495,9 @@ impl Serialize for ArenaStr {
 
 #[cfg(feature = "serde")]
 struct RangeWrapper<'a> {
+    #[cfg(not(feature = "sync"))]
+    ranges: &'a [CopyRangeU32],
+    #[cfg(feature = "sync")]
     ranges: &'a AppendVec<CopyRangeU32>,
     ranges_len: Cell<u32>,
     total_len: Cell<u32>,
