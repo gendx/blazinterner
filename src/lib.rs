@@ -31,7 +31,10 @@
     clippy::multiple_unsafe_ops_per_block,
     clippy::undocumented_unsafe_blocks
 )]
+#![cfg_attr(not(any(test, feature = "debug")), no_std)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
+
+extern crate alloc;
 
 #[cfg(feature = "delta")]
 mod delta;
@@ -39,8 +42,19 @@ mod mapping;
 mod slice;
 mod str;
 
+#[cfg(not(feature = "sync"))]
+use alloc::vec::Vec;
 #[cfg(feature = "sync")]
 use appendvec::AppendVec;
+use core::borrow::Borrow;
+use core::cmp::Ordering;
+use core::fmt::Debug;
+use core::hash::{BuildHasher, Hash, Hasher};
+use core::marker::PhantomData;
+#[cfg(feature = "get-size2")]
+use core::mem::size_of;
+#[cfg(feature = "debug")]
+use core::sync::atomic::{self, AtomicUsize};
 #[cfg(feature = "sync")]
 use dashtable::DashTable;
 #[cfg(feature = "delta")]
@@ -59,15 +73,6 @@ use serde::de::{SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use slice::CopyRangeU32;
 pub use slice::{ArenaSlice, InternedSlice};
-use std::borrow::Borrow;
-use std::cmp::Ordering;
-use std::fmt::Debug;
-use std::hash::{BuildHasher, Hash, Hasher};
-use std::marker::PhantomData;
-#[cfg(feature = "get-size2")]
-use std::mem::size_of;
-#[cfg(feature = "debug")]
-use std::sync::atomic::{self, AtomicUsize};
 pub use str::{ArenaStr, InternedStr};
 
 /// A handle to an interned value in an [`Arena`].
@@ -89,7 +94,7 @@ impl<T: ?Sized, Storage> Default for Interned<T, Storage> {
 }
 
 impl<T: ?Sized, Storage> Debug for Interned<T, Storage> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_tuple("I").field(&self.id).finish()
     }
 }
@@ -382,7 +387,7 @@ where
     T: Debug,
     Storage: Borrow<T>,
 {
-    fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, fmt: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         fmt.debug_list().entries(self.iter_()).finish()
     }
 }
@@ -648,7 +653,7 @@ where
 {
     type Value = Arena<T, Storage>;
 
-    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+    fn expecting(&self, formatter: &mut core::fmt::Formatter) -> core::fmt::Result {
         formatter.write_str("a sequence of values")
     }
 

@@ -1,9 +1,9 @@
+use core::borrow::Borrow;
+use core::fmt::Debug;
+use core::marker::PhantomData;
+use core::ops::{Deref, DerefMut};
 #[cfg(feature = "get-size2")]
 use get_size2::{GetSize, GetSizeTracker};
-use std::borrow::Borrow;
-use std::fmt::Debug;
-use std::marker::PhantomData;
-use std::ops::{Deref, DerefMut};
 
 /// Helper trait for delta-encoding of interned values.
 pub trait Accumulator: Default {
@@ -83,7 +83,7 @@ impl<T, Accum> Debug for DeltaEncoding<T, Accum>
 where
     T: Debug,
 {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         self.inner.fmt(f)
     }
 }
@@ -129,9 +129,9 @@ where
 mod serialization {
     use super::*;
     use crate::Arena;
+    use core::hash::Hash;
     use serde::de::{SeqAccess, Visitor};
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
-    use std::hash::Hash;
 
     impl<T: ?Sized, Storage, DeltaStorage, Accum> Serialize for DeltaEncoding<&Arena<T, Storage>, Accum>
     where
@@ -190,7 +190,7 @@ mod serialization {
     {
         type Value = DeltaEncoding<Arena<T, Storage>, Accum>;
 
-        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        fn expecting(&self, formatter: &mut core::fmt::Formatter) -> core::fmt::Result {
             formatter.write_str("a sequence of values")
         }
 

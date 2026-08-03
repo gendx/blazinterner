@@ -1,5 +1,16 @@
+use alloc::vec::Vec;
 #[cfg(feature = "sync")]
 use appendvec::AppendVec;
+use core::borrow::Borrow;
+#[cfg(feature = "serde")]
+use core::cell::Cell;
+use core::cmp::Ordering;
+use core::fmt::Debug;
+use core::hash::{BuildHasher, Hash, Hasher};
+use core::marker::PhantomData;
+use core::ops::Range;
+#[cfg(feature = "debug")]
+use core::sync::atomic::{self, AtomicUsize};
 #[cfg(feature = "sync")]
 use dashtable::DashTable;
 #[cfg(feature = "get-size2")]
@@ -15,16 +26,6 @@ use serde::ser::{SerializeSeq, SerializeTuple};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 #[cfg(feature = "serde")]
 use serde_tuple::{Deserialize_tuple, Serialize_tuple};
-use std::borrow::Borrow;
-#[cfg(feature = "serde")]
-use std::cell::Cell;
-use std::cmp::Ordering;
-use std::fmt::Debug;
-use std::hash::{BuildHasher, Hash, Hasher};
-use std::marker::PhantomData;
-use std::ops::Range;
-#[cfg(feature = "debug")]
-use std::sync::atomic::{self, AtomicUsize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[cfg_attr(feature = "serde", derive(Serialize_tuple, Deserialize_tuple))]
@@ -61,7 +62,7 @@ impl<T> Default for InternedSlice<T> {
 }
 
 impl<T> Debug for InternedSlice<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_tuple("I").field(&self.id).finish()
     }
 }
@@ -413,7 +414,7 @@ impl<T> Debug for ArenaSlice<T>
 where
     T: Debug,
 {
-    fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, fmt: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         fmt.debug_list().entries(self.iter_()).finish()
     }
 }
@@ -674,7 +675,7 @@ where
     ///
     /// This function requires the iterator length to be correct (and not to
     /// change upon cloning). This is akin to the nightly-only
-    /// [`TrustedLen`](std::iter::TrustedLen) trait.
+    /// [`TrustedLen`](core::iter::TrustedLen) trait.
     #[cfg(feature = "sync")]
     pub unsafe fn intern_iter(
         &self,
@@ -718,7 +719,7 @@ where
     ///
     /// This function requires the iterator length to be correct (and not to
     /// change upon cloning). This is akin to the nightly-only
-    /// [`TrustedLen`](std::iter::TrustedLen) trait.
+    /// [`TrustedLen`](core::iter::TrustedLen) trait.
     pub unsafe fn intern_iter_mut(
         &mut self,
         value: impl ExactSizeIterator<Item = T> + Clone,
@@ -851,7 +852,7 @@ where
     /// # Safety
     ///
     /// This function requires the iterator length to be correct. This is akin
-    /// to the nightly-only [`TrustedLen`](std::iter::TrustedLen) trait.
+    /// to the nightly-only [`TrustedLen`](core::iter::TrustedLen) trait.
     #[cfg(feature = "raw")]
     pub unsafe fn push_iter_mut(
         &mut self,
@@ -870,7 +871,7 @@ where
     /// # Safety
     ///
     /// This function requires the iterator length to be correct. This is akin
-    /// to the nightly-only [`TrustedLen`](std::iter::TrustedLen) trait.
+    /// to the nightly-only [`TrustedLen`](core::iter::TrustedLen) trait.
     pub(crate) unsafe fn push_iter_mut_(
         &mut self,
         value: impl ExactSizeIterator<Item = T>,
@@ -1296,7 +1297,7 @@ where
 {
     type Value = ArenaSlice<T>;
 
-    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+    fn expecting(&self, formatter: &mut core::fmt::Formatter) -> core::fmt::Result {
         formatter.write_str("a pair of values")
     }
 
@@ -1328,6 +1329,7 @@ where
 mod delta {
     use super::*;
     use crate::{Accumulator, DeltaEncoding};
+    use alloc::boxed::Box;
 
     impl<T, Delta, Accum> Serialize for DeltaEncoding<&ArenaSlice<T>, Accum>
     where
@@ -1428,7 +1430,7 @@ mod delta {
     {
         type Value = DeltaEncoding<ArenaSlice<T>, Accum>;
 
-        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        fn expecting(&self, formatter: &mut core::fmt::Formatter) -> core::fmt::Result {
             formatter.write_str("a pair of values")
         }
 

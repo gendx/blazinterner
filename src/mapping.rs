@@ -1,11 +1,14 @@
 use super::{Arena, ArenaSlice, ArenaStr, Interned, InternedSlice, InternedStr};
+use alloc::boxed::Box;
+use alloc::vec;
+use alloc::vec::Vec;
 #[cfg(feature = "retain")]
 use bit_set::BitSet;
-use std::borrow::Borrow;
-use std::cmp::Ordering;
-use std::hash::Hash;
+use core::borrow::Borrow;
+use core::cmp::Ordering;
+use core::hash::Hash;
 #[cfg(feature = "retain")]
-use std::marker::PhantomData;
+use core::marker::PhantomData;
 
 impl<T: ?Sized, Storage> Arena<T, Storage>
 where

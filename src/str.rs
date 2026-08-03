@@ -1,6 +1,16 @@
 use crate::CopyRangeU32;
+#[cfg(any(feature = "serde", not(feature = "sync")))]
+use alloc::string::String;
+#[cfg(any(feature = "serde", not(feature = "sync")))]
+use alloc::vec::Vec;
 #[cfg(feature = "sync")]
 use appendvec::{AppendStr, AppendVec};
+#[cfg(feature = "serde")]
+use core::cell::Cell;
+use core::fmt::Debug;
+use core::hash::{BuildHasher, Hash};
+#[cfg(feature = "debug")]
+use core::sync::atomic::{self, AtomicUsize};
 #[cfg(feature = "sync")]
 use dashtable::DashTable;
 #[cfg(feature = "get-size2")]
@@ -16,12 +26,6 @@ use serde::ser::SerializeTuple;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 #[cfg(feature = "serde")]
 use serde_cow::CowStr;
-#[cfg(feature = "serde")]
-use std::cell::Cell;
-use std::fmt::Debug;
-use std::hash::{BuildHasher, Hash};
-#[cfg(feature = "debug")]
-use std::sync::atomic::{self, AtomicUsize};
 
 /// A handle to an interned value in an [`ArenaStr`].
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -36,7 +40,7 @@ impl Default for InternedStr {
 }
 
 impl Debug for InternedStr {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_tuple("I").field(&self.0).finish()
     }
 }
@@ -338,7 +342,7 @@ impl Default for ArenaStr {
 }
 
 impl Debug for ArenaStr {
-    fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, fmt: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         fmt.debug_list().entries(self.iter_()).finish()
     }
 }
@@ -592,7 +596,7 @@ struct ArenaStrVisitor;
 impl<'de> Visitor<'de> for ArenaStrVisitor {
     type Value = ArenaStr;
 
-    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+    fn expecting(&self, formatter: &mut core::fmt::Formatter) -> core::fmt::Result {
         formatter.write_str("a pair of values")
     }
 
@@ -624,9 +628,10 @@ impl<'de> Visitor<'de> for ArenaStrVisitor {
 mod delta {
     use super::*;
     use crate::{Accumulator, DeltaEncoding};
+    use alloc::boxed::Box;
+    use core::marker::PhantomData;
     use serde::ser::SerializeSeq;
     use serde_cow::CowBytes;
-    use std::marker::PhantomData;
 
     impl<Accum> Serialize for DeltaEncoding<&ArenaStr, Accum>
     where
@@ -719,7 +724,7 @@ mod delta {
     {
         type Value = DeltaEncoding<ArenaStr, Accum>;
 
-        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        fn expecting(&self, formatter: &mut core::fmt::Formatter) -> core::fmt::Result {
             formatter.write_str("a pair of values")
         }
 
