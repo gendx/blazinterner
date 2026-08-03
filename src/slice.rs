@@ -447,7 +447,7 @@ where
     }
 }
 
-#[cfg(feature = "debug")]
+#[cfg(all(feature = "debug", feature = "std"))]
 impl<T> ArenaSlice<T>
 where
     T: GetSize,
@@ -476,7 +476,11 @@ where
 
 #[cfg(feature = "debug")]
 impl<T> ArenaSlice<T> {
-    fn references(&self) -> usize {
+    /// Returns the total number of references to slices in this arena.
+    ///
+    /// The underlying counter is incremented each time a slice is interned,
+    /// whether it was already previously in the arena or not.
+    pub fn references(&self) -> usize {
         self.references.load(atomic::Ordering::Relaxed)
     }
 }

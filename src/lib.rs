@@ -31,7 +31,7 @@
     clippy::multiple_unsafe_ops_per_block,
     clippy::undocumented_unsafe_blocks
 )]
-#![cfg_attr(not(any(test, feature = "debug")), no_std)]
+#![cfg_attr(not(any(test, feature = "std")), no_std)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
 extern crate alloc;
@@ -421,7 +421,7 @@ where
     }
 }
 
-#[cfg(feature = "debug")]
+#[cfg(all(feature = "debug", feature = "std"))]
 impl<T: ?Sized, Storage> Arena<T, Storage>
 where
     Storage: GetSize,
@@ -447,7 +447,11 @@ where
 
 #[cfg(feature = "debug")]
 impl<T: ?Sized, Storage> Arena<T, Storage> {
-    fn references(&self) -> usize {
+    /// Returns the total number of references to items in this arena.
+    ///
+    /// The underlying counter is incremented each time a value is interned,
+    /// whether it was already previously in the arena or not.
+    pub fn references(&self) -> usize {
         self.references.load(atomic::Ordering::Relaxed)
     }
 }

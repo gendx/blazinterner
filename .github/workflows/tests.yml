@@ -25,6 +25,6 @@ jobs:
         run: cargo test --release --verbose --all --no-default-features
 
       - name: Run tests (all features except sync)
-        run: cargo test --release --verbose --all --no-default-features --features=debug,delta,get-size2,raw,retain,serde
+        run: cargo test --release --verbose --all --no-default-features --features=debug,delta,get-size2,raw,retain,serde,std
       - name: Run tests (all features)
         run: cargo test --release --verbose --all --all-features

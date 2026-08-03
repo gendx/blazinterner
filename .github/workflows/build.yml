@@ -36,10 +36,12 @@ jobs:
         run: cargo build --verbose --all --no-default-features --features=retain
       - name: Build (serde feature)
         run: cargo build --verbose --all --no-default-features --features=serde
+      - name: Build (std feature)
+        run: cargo build --verbose --all --no-default-features --features=std
       - name: Build (sync feature)
         run: cargo build --verbose --all --no-default-features --features=sync
 
       - name: Build (all features except sync)
-        run: cargo build --verbose --all --no-default-features --features=debug,delta,get-size2,raw,retain,serde
+        run: cargo build --verbose --all --no-default-features --features=debug,delta,get-size2,raw,retain,serde,std
       - name: Build (all features)
         run: cargo build --verbose --all --all-features

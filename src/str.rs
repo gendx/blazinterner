@@ -364,7 +364,7 @@ impl GetSize for ArenaStr {
     }
 }
 
-#[cfg(feature = "debug")]
+#[cfg(all(feature = "debug", feature = "std"))]
 impl ArenaStr {
     /// Prints a summary of the storage used by this arena to stdout.
     pub fn print_summary(&self, prefix: &str, title: &str, total_bytes: usize) {
@@ -383,8 +383,15 @@ impl ArenaStr {
             references as f64 / strings as f64,
         );
     }
+}
 
-    fn references(&self) -> usize {
+#[cfg(feature = "debug")]
+impl ArenaStr {
+    /// Returns the total number of references to strings in this arena.
+    ///
+    /// The underlying counter is incremented each time a string is interned,
+    /// whether it was already previously in the arena or not.
+    pub fn references(&self) -> usize {
         self.references.load(atomic::Ordering::Relaxed)
     }
 }

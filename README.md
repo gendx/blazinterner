@@ -29,3 +29,15 @@ Here are the main features offered by this crate.
   concurrently! This is thanks to the underlying `AppendVec` implementation.
   However, only one write (using `Interned::from()`) can happen at a time on a
   given arena, due to an exclusive write lock.
+
+## `no_std` support
+
+The base functionality of Blazinterner is
+[`no_std`](https://rust.docs.kernel.org/next/core/attribute.no_std.html), but
+requires the [`alloc` crate](https://doc.rust-lang.org/alloc/). Exceptions are:
+
+- The `sync` feature, which enables concurrent usage of an arena, which under
+  the hood requires the standard library to use synchronization primitives such
+  as mutexes.
+- The `std` feature, which provides additional APIs such as `print_summary()`
+  that writes debug information to the standard output.
