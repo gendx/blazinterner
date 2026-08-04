@@ -28,6 +28,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_tuple::{Deserialize_tuple, Serialize_tuple};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[cfg_attr(feature = "get-size2", derive(GetSize))]
 #[cfg_attr(feature = "serde", derive(Serialize_tuple, Deserialize_tuple))]
 pub struct CopyRangeU32 {
     pub start: u32,
@@ -50,6 +51,7 @@ impl From<CopyRangeU32> for Range<u32> {
 }
 
 /// A handle to an interned value in an [`ArenaSlice`].
+#[cfg_attr(feature = "get-size2", derive(GetSize))]
 pub struct InternedSlice<T> {
     id: u32,
     _phantom: PhantomData<fn() -> *const T>,
@@ -102,12 +104,6 @@ impl<T> Hash for InternedSlice<T> {
     {
         self.id.hash(state);
     }
-}
-
-#[cfg(feature = "get-size2")]
-impl<T> GetSize for InternedSlice<T> {
-    // There is nothing on the heap, so the default implementation works out of the
-    // box.
 }
 
 #[cfg(feature = "raw")]
@@ -167,6 +163,7 @@ impl<'de, T> Deserialize<'de> for InternedSlice<T> {
     }
 }
 
+#[cfg_attr(feature = "get-size2", derive(GetSize))]
 struct RangeVec<T> {
     #[cfg(not(feature = "sync"))]
     vec: Vec<T>,
@@ -436,14 +433,9 @@ where
     T: GetSize,
 {
     fn get_heap_size_with_tracker<Tr: GetSizeTracker>(&self, tracker: Tr) -> (usize, Tr) {
-        let heap_size = self
-            .rangevec
-            .vec
-            .iter()
-            .map(|x| x.get_size())
-            .sum::<usize>()
-            + self.rangevec.ranges.len() * (size_of::<CopyRangeU32>() + size_of::<u32>());
-        (heap_size, tracker)
+        let (size_vec, tracker) = GetSize::get_heap_size_with_tracker(&self.rangevec, tracker);
+        let (size_map, tracker) = GetSize::get_heap_size_with_tracker(&self.map, tracker);
+        (size_vec + size_map, tracker)
     }
 }
 

@@ -51,8 +51,6 @@ use core::cmp::Ordering;
 use core::fmt::Debug;
 use core::hash::{BuildHasher, Hash, Hasher};
 use core::marker::PhantomData;
-#[cfg(feature = "get-size2")]
-use core::mem::size_of;
 #[cfg(feature = "debug")]
 use core::sync::atomic::{self, AtomicUsize};
 #[cfg(feature = "sync")]
@@ -82,6 +80,7 @@ pub use str::{ArenaStr, InternedStr};
 /// good default that incurs no overhead. For non-[`Sized`] values such as
 /// [`str`](prim@str), you need to specify a [`Sized`] storage type, such as
 /// `Box<T>`.
+#[cfg_attr(feature = "get-size2", derive(GetSize))]
 pub struct Interned<T: ?Sized, Storage = T> {
     id: u32,
     _phantom: PhantomData<fn() -> (*const T, *const Storage)>,
@@ -134,12 +133,6 @@ impl<T: ?Sized, Storage> Hash for Interned<T, Storage> {
     {
         self.id.hash(state);
     }
-}
-
-#[cfg(feature = "get-size2")]
-impl<T: ?Sized, Storage> GetSize for Interned<T, Storage> {
-    // There is nothing on the heap, so the default implementation works out of the
-    // box.
 }
 
 #[cfg(feature = "raw")]
@@ -415,9 +408,9 @@ where
     Storage: GetSize,
 {
     fn get_heap_size_with_tracker<Tr: GetSizeTracker>(&self, tracker: Tr) -> (usize, Tr) {
-        let heap_size = self.vec.iter().map(|x| x.get_size()).sum::<usize>()
-            + self.vec.len() * size_of::<u32>();
-        (heap_size, tracker)
+        let (size_vec, tracker) = GetSize::get_heap_size_with_tracker(&self.vec, tracker);
+        let (size_map, tracker) = GetSize::get_heap_size_with_tracker(&self.map, tracker);
+        (size_vec + size_map, tracker)
     }
 }
 

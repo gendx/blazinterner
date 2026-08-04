@@ -76,6 +76,7 @@ impl InternedStr {
     }
 }
 
+#[cfg_attr(feature = "get-size2", derive(GetSize))]
 struct RangeVecStr {
     #[cfg(not(feature = "sync"))]
     vec: String,
@@ -358,9 +359,9 @@ impl Eq for ArenaStr {}
 #[cfg(feature = "get-size2")]
 impl GetSize for ArenaStr {
     fn get_heap_size_with_tracker<Tr: GetSizeTracker>(&self, tracker: Tr) -> (usize, Tr) {
-        let heap_size = self.rangevec.vec.len() * size_of::<u8>()
-            + self.rangevec.ranges.len() * (size_of::<CopyRangeU32>() + size_of::<u32>());
-        (heap_size, tracker)
+        let (size_vec, tracker) = GetSize::get_heap_size_with_tracker(&self.rangevec, tracker);
+        let (size_map, tracker) = GetSize::get_heap_size_with_tracker(&self.map, tracker);
+        (size_vec + size_map, tracker)
     }
 }
 

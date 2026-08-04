@@ -19,7 +19,7 @@ rustdoc-args = ["--cfg", "docsrs", "--generate-link-to-definition"]
 default = ["std", "sync"]
 debug = ["get-size2"]
 delta = []
-get-size2 = ["dep:get-size2"]
+get-size2 = ["dep:get-size2", "appendvec?/get-size2", "dashtable?/get-size2"]
 raw = []
 retain = ["dep:bit-set"]
 serde = ["dep:serde", "dep:serde_tuple"]
@@ -27,10 +27,10 @@ std = []
 sync = ["dep:appendvec", "dep:dashtable"]
 
 [dependencies]
-appendvec = { optional = true, version = "0.1.5" }
+appendvec = { optional = true, version = "0.1.6" }
 bit-set = { optional = true, version = "0.11.1", default-features = false }
-dashtable = { optional = true, version = "0.2.0" }
-get-size2 = { optional = true, version = "0.11.0", default-features = false, features = ["derive"] }
+dashtable = { optional = true, version = "0.2.1" }
+get-size2 = { optional = true, version = "0.11.0", default-features = false, features = ["alloc", "derive", "hashbrown"] }
 hashbrown = "0.17.1"
 serde = { optional = true, version = "1.0.229", default-features = false, features = ["derive"] }
 serde_cow = "0.1.2"
