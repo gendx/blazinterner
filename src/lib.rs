@@ -186,10 +186,7 @@ impl<'de, T: ?Sized, Storage> Deserialize<'de> for Interned<T, Storage> {
         D: Deserializer<'de>,
     {
         let id = u32::deserialize(deserializer)?;
-        Ok(Self {
-            id,
-            _phantom: PhantomData,
-        })
+        Ok(Self::new(id))
     }
 }
 
@@ -305,10 +302,7 @@ where
         let hash = self.hasher.hash_one(value);
         self.map
             .find(hash, |&i| self.vec[i as usize].borrow() == value)
-            .map(|id| Interned {
-                id: *id,
-                _phantom: PhantomData,
-            })
+            .map(|id| Interned::new(*id))
     }
 
     /// Returns the given value's [`Interned`] handle if it is already interned.
@@ -325,18 +319,12 @@ where
         return self
             .map
             .find(hash, |&i| self.vec[i as usize].borrow() == value)
-            .map(|id| Interned {
-                id: *id,
-                _phantom: PhantomData,
-            });
+            .map(|id| Interned::new(*id));
         #[cfg(feature = "sync")]
         return self
             .map
             .find_mut(hash, |&i| self.vec[i as usize].borrow() == value)
-            .map(|id| Interned {
-                id: *id,
-                _phantom: PhantomData,
-            });
+            .map(|id| Interned::new(*id));
     }
 }
 

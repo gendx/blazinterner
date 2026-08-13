@@ -281,7 +281,7 @@ impl ArenaStr {
         let hash = self.hasher.hash_one(value);
         self.map
             .find(hash, |&i| self.lookup_str(i) == value)
-            .map(|id| InternedStr(*id))
+            .map(|id| InternedStr::new(*id))
     }
 
     /// Returns the given string's [`InternedStr`] handle if it is already
@@ -299,12 +299,12 @@ impl ArenaStr {
         return self
             .map
             .find(hash, |&i| self.lookup_str(i) == value)
-            .map(|id| InternedStr(*id));
+            .map(|id| InternedStr::new(*id));
         #[cfg(feature = "sync")]
         return self
             .map
             .find_mut(hash, |&i| self.rangevec.lookup_str(i) == value)
-            .map(|id| InternedStr(*id));
+            .map(|id| InternedStr::new(*id));
     }
 
     /// Unconditionally push a value, without validating that it's already

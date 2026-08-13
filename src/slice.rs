@@ -156,10 +156,7 @@ impl<'de, T> Deserialize<'de> for InternedSlice<T> {
         D: Deserializer<'de>,
     {
         let id = u32::deserialize(deserializer)?;
-        Ok(Self {
-            id,
-            _phantom: PhantomData,
-        })
+        Ok(Self::new(id))
     }
 }
 
@@ -327,10 +324,7 @@ where
         let hash = self.hash_slice(value);
         self.map
             .find(hash, |&i| self.lookup_slice(i) == value)
-            .map(|id| InternedSlice {
-                id: *id,
-                _phantom: PhantomData,
-            })
+            .map(|id| InternedSlice::new(*id))
     }
 
     /// Returns the given value's [`InternedSlice`] handle if it is already
@@ -348,18 +342,12 @@ where
         return self
             .map
             .find(hash, |&i| self.lookup_slice(i) == value)
-            .map(|id| InternedSlice {
-                id: *id,
-                _phantom: PhantomData,
-            });
+            .map(|id| InternedSlice::new(*id));
         #[cfg(feature = "sync")]
         return self
             .map
             .find_mut(hash, |&i| self.rangevec.lookup_slice(i) == value)
-            .map(|id| InternedSlice {
-                id: *id,
-                _phantom: PhantomData,
-            });
+            .map(|id| InternedSlice::new(*id));
     }
 }
 
