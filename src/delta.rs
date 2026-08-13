@@ -129,11 +129,12 @@ where
 mod serialization {
     use super::*;
     use crate::Arena;
-    use core::hash::Hash;
+    use core::hash::{BuildHasher, Hash};
     use serde::de::{SeqAccess, Visitor};
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-    impl<T: ?Sized, Storage, DeltaStorage, Accum> Serialize for DeltaEncoding<&Arena<T, Storage>, Accum>
+    impl<T: ?Sized, Storage, H, DeltaStorage, Accum> Serialize
+        for DeltaEncoding<&Arena<T, Storage, H>, Accum>
     where
         Storage: Borrow<T>,
         DeltaStorage: Serialize,
@@ -148,10 +149,11 @@ mod serialization {
         }
     }
 
-    impl<'de, T: ?Sized, Storage, Delta, DeltaStorage, Accum> Deserialize<'de>
-        for DeltaEncoding<Arena<T, Storage>, Accum>
+    impl<'de, T: ?Sized, Storage, H, Delta, DeltaStorage, Accum> Deserialize<'de>
+        for DeltaEncoding<Arena<T, Storage, H>, Accum>
     where
         T: Eq + Hash,
+        H: Default + BuildHasher,
         Storage: Borrow<T>,
         DeltaStorage: Borrow<Delta> + Deserialize<'de>,
         Accum:
@@ -165,12 +167,13 @@ mod serialization {
         }
     }
 
-    struct DeltaArenaVisitor<T: ?Sized, Storage, Accum> {
-        _phantom: PhantomData<fn() -> Arena<T, Storage>>,
+    struct DeltaArenaVisitor<T: ?Sized, Storage, H, Accum> {
+        #[expect(clippy::type_complexity)]
+        _phantom: PhantomData<fn() -> Arena<T, Storage, H>>,
         _accum: PhantomData<Accum>,
     }
 
-    impl<T: ?Sized, Storage, Accum> DeltaArenaVisitor<T, Storage, Accum> {
+    impl<T: ?Sized, Storage, H, Accum> DeltaArenaVisitor<T, Storage, H, Accum> {
         fn new() -> Self {
             Self {
                 _phantom: PhantomData,
@@ -179,16 +182,17 @@ mod serialization {
         }
     }
 
-    impl<'de, T: ?Sized, Storage, Delta, DeltaStorage, Accum> Visitor<'de>
-        for DeltaArenaVisitor<T, Storage, Accum>
+    impl<'de, T: ?Sized, Storage, H, Delta, DeltaStorage, Accum> Visitor<'de>
+        for DeltaArenaVisitor<T, Storage, H, Accum>
     where
         T: Eq + Hash,
+        H: Default + BuildHasher,
         Storage: Borrow<T>,
         DeltaStorage: Borrow<Delta> + Deserialize<'de>,
         Accum:
             Accumulator<Value = T, Storage = Storage, Delta = Delta, DeltaStorage = DeltaStorage>,
     {
-        type Value = DeltaEncoding<Arena<T, Storage>, Accum>;
+        type Value = DeltaEncoding<Arena<T, Storage, H>, Accum>;
 
         fn expecting(&self, formatter: &mut core::fmt::Formatter) -> core::fmt::Result {
             formatter.write_str("a sequence of values")

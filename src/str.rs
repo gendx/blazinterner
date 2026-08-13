@@ -7,8 +7,10 @@ use alloc::vec::Vec;
 use appendvec::{AppendStr, AppendVec};
 #[cfg(feature = "serde")]
 use core::cell::Cell;
+use core::cmp::Ordering;
 use core::fmt::Debug;
-use core::hash::{BuildHasher, Hash};
+use core::hash::{BuildHasher, Hash, Hasher};
+use core::marker::PhantomData;
 #[cfg(feature = "debug")]
 use core::sync::atomic::{self, AtomicUsize};
 #[cfg(feature = "sync")]
@@ -28,25 +30,68 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_cow::CowStr;
 
 /// A handle to an interned value in an [`ArenaStr`].
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[cfg_attr(feature = "get-size2", derive(GetSize))]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-pub struct InternedStr(u32);
+pub struct InternedStr<H = DefaultHashBuilder> {
+    id: u32,
+    _phantom: PhantomData<fn() -> H>,
+}
 
-impl Default for InternedStr {
+impl<H> Default for InternedStr<H> {
     fn default() -> Self {
         Self::new(u32::MAX)
     }
 }
 
-impl Debug for InternedStr {
+impl<H> Debug for InternedStr<H> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_tuple("I").field(&self.0).finish()
+        f.debug_tuple("I").field(&self.id).finish()
     }
 }
 
+impl<H> Clone for InternedStr<H> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<H> Copy for InternedStr<H> {}
+
+impl<H> PartialEq for InternedStr<H> {
+    fn eq(&self, other: &Self) -> bool {
+        self.id.eq(&other.id)
+    }
+}
+
+impl<H> Eq for InternedStr<H> {}
+
+impl<H> PartialOrd for InternedStr<H> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl<H> Ord for InternedStr<H> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.id.cmp(&other.id)
+    }
+}
+
+impl<H> Hash for InternedStr<H> {
+    fn hash<I>(&self, state: &mut I)
+    where
+        I: Hasher,
+    {
+        self.id.hash(state);
+    }
+}
+
+#[cfg(feature = "get-size2")]
+impl<H> GetSize for InternedStr<H> {
+    // There is nothing on the heap, so the default implementation works out of the
+    // box.
+}
+
 #[cfg(feature = "raw")]
-impl InternedStr {
+impl<H> InternedStr<H> {
     /// Creates an interned value for the given index.
     ///
     /// This is a low-level function. You should instead use the
@@ -62,17 +107,41 @@ impl InternedStr {
     /// [`ArenaStr::lookup()`] and [`ArenaStr::lookup_bytes()`] APIs, unless you
     /// really know what you're doing.
     pub fn id(&self) -> u32 {
-        self.0
+        self.id
     }
 }
 
-impl InternedStr {
+impl<H> InternedStr<H> {
     pub(crate) fn new(id: u32) -> Self {
-        Self(id)
+        Self {
+            id,
+            _phantom: PhantomData,
+        }
     }
 
     pub(crate) fn id_(&self) -> u32 {
-        self.0
+        self.id
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<H> Serialize for InternedStr<H> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_u32(self.id)
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de, H> Deserialize<'de> for InternedStr<H> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let id = u32::deserialize(deserializer)?;
+        Ok(Self::new(id))
     }
 }
 
@@ -161,18 +230,21 @@ impl RangeVecStr {
 }
 
 /// Interning arena for strings.
-pub struct ArenaStr {
+pub struct ArenaStr<H = DefaultHashBuilder> {
     rangevec: RangeVecStr,
     #[cfg(not(feature = "sync"))]
     map: HashTable<u32>,
     #[cfg(feature = "sync")]
     map: DashTable<u32>,
-    hasher: DefaultHashBuilder,
+    hasher: H,
     #[cfg(feature = "debug")]
     references: AtomicUsize,
 }
 
-impl Clone for ArenaStr {
+impl<H> Clone for ArenaStr<H>
+where
+    H: Default + BuildHasher,
+{
     fn clone(&self) -> Self {
         let iter = self.iter_();
         let mut arena = Self::with_capacity(iter.len(), self.bytes());
@@ -183,7 +255,10 @@ impl Clone for ArenaStr {
     }
 }
 
-impl ArenaStr {
+impl<H> ArenaStr<H>
+where
+    H: Default,
+{
     /// Creates a new arena with pre-allocated space to store at least the given
     /// number of strings, totalling the given number of bytes.
     pub fn with_capacity(strings: usize, bytes: usize) -> Self {
@@ -202,12 +277,14 @@ impl ArenaStr {
             map: HashTable::with_capacity(strings),
             #[cfg(feature = "sync")]
             map: DashTable::with_capacity(strings),
-            hasher: DefaultHashBuilder::default(),
+            hasher: H::default(),
             #[cfg(feature = "debug")]
             references: AtomicUsize::new(0),
         }
     }
+}
 
+impl<H> ArenaStr<H> {
     /// Returns the number of strings in this arena.
     ///
     /// Note that because [`ArenaStr`] is a concurrent data structure, this is
@@ -268,7 +345,12 @@ impl ArenaStr {
     fn iter_bytes_(&self) -> impl ExactSizeIterator<Item = &[u8]> {
         self.rangevec.iter_bytes()
     }
+}
 
+impl<H> ArenaStr<H>
+where
+    H: BuildHasher,
+{
     /// Returns the given string's [`InternedStr`] handle if it is already
     /// interned.
     ///
@@ -277,7 +359,7 @@ impl ArenaStr {
     ///
     /// See also [`find_mut()`](Self::find_mut), which is more efficient if you
     /// hold a mutable reference to this arena as it avoids acquiring locks.
-    pub fn find(&self, value: &str) -> Option<InternedStr> {
+    pub fn find(&self, value: &str) -> Option<InternedStr<H>> {
         let hash = self.hasher.hash_one(value);
         self.map
             .find(hash, |&i| self.lookup_str(i) == value)
@@ -293,7 +375,7 @@ impl ArenaStr {
     /// Contrary to [`find()`](Self::find), no locks are held internally because
     /// this function already takes an exclusive mutable reference to this
     /// arena.
-    pub fn find_mut(&mut self, value: &str) -> Option<InternedStr> {
+    pub fn find_mut(&mut self, value: &str) -> Option<InternedStr<H>> {
         let hash = self.hasher.hash_one(value);
         #[cfg(not(feature = "sync"))]
         return self
@@ -318,7 +400,10 @@ impl ArenaStr {
     }
 }
 
-impl Default for ArenaStr {
+impl<H> Default for ArenaStr<H>
+where
+    H: Default,
+{
     fn default() -> Self {
         Self {
             #[cfg(not(feature = "sync"))]
@@ -335,29 +420,29 @@ impl Default for ArenaStr {
             map: HashTable::new(),
             #[cfg(feature = "sync")]
             map: DashTable::new(),
-            hasher: DefaultHashBuilder::default(),
+            hasher: H::default(),
             #[cfg(feature = "debug")]
             references: AtomicUsize::new(0),
         }
     }
 }
 
-impl Debug for ArenaStr {
+impl<H> Debug for ArenaStr<H> {
     fn fmt(&self, fmt: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         fmt.debug_list().entries(self.iter_()).finish()
     }
 }
 
-impl PartialEq for ArenaStr {
+impl<H> PartialEq for ArenaStr<H> {
     fn eq(&self, other: &Self) -> bool {
         self.iter_bytes_().eq(other.iter_bytes_())
     }
 }
 
-impl Eq for ArenaStr {}
+impl<H> Eq for ArenaStr<H> {}
 
 #[cfg(feature = "get-size2")]
-impl GetSize for ArenaStr {
+impl<H> GetSize for ArenaStr<H> {
     fn get_heap_size_with_tracker<Tr: GetSizeTracker>(&self, tracker: Tr) -> (usize, Tr) {
         let (size_vec, tracker) = GetSize::get_heap_size_with_tracker(&self.rangevec, tracker);
         let (size_map, tracker) = GetSize::get_heap_size_with_tracker(&self.map, tracker);
@@ -366,7 +451,7 @@ impl GetSize for ArenaStr {
 }
 
 #[cfg(all(feature = "debug", feature = "std"))]
-impl ArenaStr {
+impl<H> ArenaStr<H> {
     /// Prints a summary of the storage used by this arena to stdout.
     pub fn print_summary(&self, prefix: &str, title: &str, total_bytes: usize) {
         let strings = self.rangevec.ranges.len();
@@ -387,7 +472,7 @@ impl ArenaStr {
 }
 
 #[cfg(feature = "debug")]
-impl ArenaStr {
+impl<H> ArenaStr<H> {
     /// Returns the total number of references to strings in this arena.
     ///
     /// The underlying counter is incremented each time a string is interned,
@@ -397,7 +482,10 @@ impl ArenaStr {
     }
 }
 
-impl ArenaStr {
+impl<H> ArenaStr<H>
+where
+    H: BuildHasher,
+{
     /// Interns the given value in this arena.
     ///
     /// If the value was already interned in this arena, its interning index
@@ -406,7 +494,7 @@ impl ArenaStr {
     /// See also [`intern_mut()`](Self::intern_mut), which is more efficient if
     /// you hold a mutable reference to this arena as it avoids acquiring locks.
     #[cfg(feature = "sync")]
-    pub fn intern(&self, value: &str) -> InternedStr {
+    pub fn intern(&self, value: &str) -> InternedStr<H> {
         #[cfg(feature = "debug")]
         self.references.fetch_add(1, atomic::Ordering::Relaxed);
 
@@ -431,7 +519,7 @@ impl ArenaStr {
     /// Contrary to [`intern()`](Self::intern), no locks are held internally
     /// because this function already takes an exclusive mutable reference to
     /// this arena.
-    pub fn intern_mut(&mut self, value: &str) -> InternedStr {
+    pub fn intern_mut(&mut self, value: &str) -> InternedStr<H> {
         #[cfg(feature = "debug")]
         {
             *self.references.get_mut() += 1;
@@ -479,7 +567,9 @@ impl ArenaStr {
         });
         id
     }
+}
 
+impl<H> ArenaStr<H> {
     /// Retrieves the given [`InternedStr`] value from this arena.
     ///
     /// The caller is responsible for ensuring that the same arena was used to
@@ -488,8 +578,8 @@ impl ArenaStr {
     ///
     /// If you only need to access the bytes,
     /// [`lookup_bytes()`](Self::lookup_bytes) may be more efficient.
-    pub fn lookup(&self, interned: InternedStr) -> &str {
-        self.lookup_str(interned.0)
+    pub fn lookup(&self, interned: InternedStr<H>) -> &str {
+        self.lookup_str(interned.id)
     }
 
     /// Retrieves the bytes for the given [`InternedStr`] value from this arena.
@@ -497,8 +587,8 @@ impl ArenaStr {
     /// The caller is responsible for ensuring that the same arena was used to
     /// intern this value, otherwise an arbitrary value will be returned or
     /// a panic will happen.
-    pub fn lookup_bytes(&self, interned: InternedStr) -> &[u8] {
-        self.rangevec.lookup_bytes(interned.0)
+    pub fn lookup_bytes(&self, interned: InternedStr<H>) -> &[u8] {
+        self.rangevec.lookup_bytes(interned.id)
     }
 
     fn lookup_str(&self, id: u32) -> &str {
@@ -507,7 +597,7 @@ impl ArenaStr {
 }
 
 #[cfg(feature = "serde")]
-impl Serialize for ArenaStr {
+impl<H> Serialize for ArenaStr<H> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -588,21 +678,38 @@ impl<'a> Serialize for ArenaStrWrapper<'a> {
 }
 
 #[cfg(feature = "serde")]
-impl<'de> Deserialize<'de> for ArenaStr {
+impl<'de, H> Deserialize<'de> for ArenaStr<H>
+where
+    H: Default + BuildHasher,
+{
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
-        deserializer.deserialize_tuple(2, ArenaStrVisitor)
+        deserializer.deserialize_tuple(2, ArenaStrVisitor::new())
     }
 }
 
 #[cfg(feature = "serde")]
-struct ArenaStrVisitor;
+struct ArenaStrVisitor<H> {
+    _phantom: PhantomData<fn() -> ArenaStr<H>>,
+}
 
 #[cfg(feature = "serde")]
-impl<'de> Visitor<'de> for ArenaStrVisitor {
-    type Value = ArenaStr;
+impl<H> ArenaStrVisitor<H> {
+    fn new() -> Self {
+        Self {
+            _phantom: PhantomData,
+        }
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de, H> Visitor<'de> for ArenaStrVisitor<H>
+where
+    H: Default + BuildHasher,
+{
+    type Value = ArenaStr<H>;
 
     fn expecting(&self, formatter: &mut core::fmt::Formatter) -> core::fmt::Result {
         formatter.write_str("a pair of values")
@@ -641,7 +748,7 @@ mod delta {
     use serde::ser::SerializeSeq;
     use serde_cow::CowBytes;
 
-    impl<Accum> Serialize for DeltaEncoding<&ArenaStr, Accum>
+    impl<H, Accum> Serialize for DeltaEncoding<&ArenaStr<H>, Accum>
     where
         Accum: Accumulator<Value = str, Storage = Box<str>, DeltaStorage = Box<[u8]>>,
     {
@@ -702,8 +809,9 @@ mod delta {
         }
     }
 
-    impl<'de, Accum> Deserialize<'de> for DeltaEncoding<ArenaStr, Accum>
+    impl<'de, H, Accum> Deserialize<'de> for DeltaEncoding<ArenaStr<H>, Accum>
     where
+        H: Default + BuildHasher,
         Accum: Accumulator<Value = str, Storage = Box<str>, Delta = [u8]>,
     {
         fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
@@ -714,23 +822,26 @@ mod delta {
         }
     }
 
-    struct DeltaArenaStrVisitor<Accum> {
+    struct DeltaArenaStrVisitor<H, Accum> {
+        _phantom: PhantomData<fn() -> ArenaStr<H>>,
         _accum: PhantomData<Accum>,
     }
 
-    impl<Accum> DeltaArenaStrVisitor<Accum> {
+    impl<H, Accum> DeltaArenaStrVisitor<H, Accum> {
         fn new() -> Self {
             Self {
+                _phantom: PhantomData,
                 _accum: PhantomData,
             }
         }
     }
 
-    impl<'de, Accum> Visitor<'de> for DeltaArenaStrVisitor<Accum>
+    impl<'de, H, Accum> Visitor<'de> for DeltaArenaStrVisitor<H, Accum>
     where
+        H: Default + BuildHasher,
         Accum: Accumulator<Value = str, Storage = Box<str>, Delta = [u8]>,
     {
-        type Value = DeltaEncoding<ArenaStr, Accum>;
+        type Value = DeltaEncoding<ArenaStr<H>, Accum>;
 
         fn expecting(&self, formatter: &mut core::fmt::Formatter) -> core::fmt::Result {
             formatter.write_str("a pair of values")
@@ -824,7 +935,7 @@ mod test {
 
     #[test]
     fn test_lookup() {
-        let mut arena = ArenaStr::default();
+        let mut arena: ArenaStr = ArenaStr::default();
 
         let empty = arena.intern_mut("");
         let a = arena.intern_mut("a");
@@ -844,9 +955,9 @@ mod test {
     #[cfg(feature = "sync")]
     #[test]
     fn test_intern_lookup() {
-        let arena = ArenaStr::default();
+        let arena: ArenaStr = ArenaStr::default();
         for i in 0..100 {
-            assert_eq!(arena.intern(&make_utf8_string(i)).0, i);
+            assert_eq!(arena.intern(&make_utf8_string(i)).id, i);
         }
         for i in 0..100 {
             assert_eq!(arena.lookup(InternedStr::new(i)), &make_utf8_string(i));
@@ -855,9 +966,9 @@ mod test {
 
     #[test]
     fn test_intern_mut_lookup() {
-        let mut arena = ArenaStr::default();
+        let mut arena: ArenaStr = ArenaStr::default();
         for i in 0..100 {
-            assert_eq!(arena.intern_mut(&make_utf8_string(i)).0, i);
+            assert_eq!(arena.intern_mut(&make_utf8_string(i)).id, i);
         }
         for i in 0..100 {
             assert_eq!(arena.lookup(InternedStr::new(i)), &make_utf8_string(i));
@@ -876,12 +987,12 @@ mod test {
     #[cfg(feature = "raw")]
     #[test]
     fn test_push_mut_same_value_works() {
-        let mut arena = ArenaStr::default();
+        let mut arena: ArenaStr = ArenaStr::default();
         for i in 0..NUM_ITERS {
             for j in 0..NUM_VALUES {
                 let s = make_utf8_string(j);
                 assert_eq!(arena.push_mut(&s), i * NUM_VALUES + j);
-                let id = arena.intern_mut(&s).0;
+                let id = arena.intern_mut(&s).id;
                 assert_eq!(id % NUM_VALUES, j);
                 assert!(id / NUM_VALUES <= i);
             }
@@ -908,7 +1019,7 @@ mod test {
     #[cfg(feature = "sync")]
     #[test]
     fn test_intern_lookup_concurrent_reads() {
-        let arena = ArenaStr::default();
+        let arena: ArenaStr = ArenaStr::default();
         thread::scope(|s| {
             for _ in 0..NUM_READERS {
                 s.spawn(|| {
@@ -929,7 +1040,7 @@ mod test {
             }
             s.spawn(|| {
                 for j in 0..NUM_ITEMS as u32 {
-                    assert_eq!(arena.intern(&make_utf8_string(j)).0, j);
+                    assert_eq!(arena.intern(&make_utf8_string(j)).id, j);
                 }
             });
         });
@@ -938,7 +1049,7 @@ mod test {
     #[cfg(feature = "sync")]
     #[test]
     fn test_intern_lookup_concurrent_writes() {
-        let arena = ArenaStr::default();
+        let arena: ArenaStr = ArenaStr::default();
         thread::scope(|s| {
             s.spawn(|| {
                 loop {
@@ -958,7 +1069,7 @@ mod test {
             for _ in 0..NUM_WRITERS {
                 s.spawn(|| {
                     for j in 0..NUM_ITEMS as u32 {
-                        assert_eq!(arena.intern(&make_utf8_string(j)).0, j);
+                        assert_eq!(arena.intern(&make_utf8_string(j)).id, j);
                     }
                 });
             }
@@ -968,7 +1079,7 @@ mod test {
     #[cfg(feature = "sync")]
     #[test]
     fn test_intern_lookup_concurrent_readwrites() {
-        let arena = ArenaStr::default();
+        let arena: ArenaStr = ArenaStr::default();
         thread::scope(|s| {
             for _ in 0..NUM_READERS {
                 s.spawn(|| {
@@ -990,7 +1101,7 @@ mod test {
             for _ in 0..NUM_WRITERS {
                 s.spawn(|| {
                     for j in 0..NUM_ITEMS as u32 {
-                        assert_eq!(arena.intern(&make_utf8_string(j)).0, j);
+                        assert_eq!(arena.intern(&make_utf8_string(j)).id, j);
                     }
                 });
             }
@@ -1000,7 +1111,7 @@ mod test {
     #[cfg(feature = "serde")]
     #[test]
     fn test_serde_postcard() {
-        let mut arena = ArenaStr::default();
+        let mut arena: ArenaStr = ArenaStr::default();
 
         let empty = arena.intern_mut("");
         let a = arena.intern_mut("a");
@@ -1045,7 +1156,7 @@ mod test {
     #[cfg(feature = "serde")]
     #[test]
     fn test_serde_json() {
-        let mut arena = ArenaStr::default();
+        let mut arena: ArenaStr = ArenaStr::default();
 
         let empty = arena.intern_mut("");
         let a = arena.intern_mut("a");
@@ -1111,7 +1222,7 @@ mod test {
     #[cfg(all(feature = "delta", feature = "serde"))]
     #[test]
     fn test_serde_delta() {
-        let mut arena = ArenaStr::default();
+        let mut arena: ArenaStr = ArenaStr::default();
 
         let empty = arena.intern_mut("");
         let a = arena.intern_mut("a");
