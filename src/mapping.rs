@@ -9,6 +9,7 @@ use core::cmp::Ordering;
 use core::hash::{BuildHasher, Hash};
 #[cfg(feature = "retain")]
 use core::marker::PhantomData;
+use either::Either;
 
 impl<T: ?Sized, Storage, H> Arena<T, Storage, H>
 where
@@ -19,9 +20,16 @@ where
     pub fn sort(&self) -> Mapping {
         let mut mapping: Vec<u32> = (0..self.len() as u32).collect();
         mapping.sort_by_cached_key(|i| self.lookup_ref(Interned::new(*i)));
-        let reverse = ReverseMapping(mapping.into_boxed_slice());
+        let reverse = ReverseMapping::new(mapping.into_boxed_slice());
         let forward = reverse.reverse();
         Mapping { forward, reverse }
+    }
+
+    /// Returns the identity mapping of the items in this arena.
+    ///
+    /// This can be useful to rehash the arena.
+    pub fn identity(&self) -> Mapping {
+        Mapping::identity(self.len() as u32)
     }
 }
 
@@ -168,7 +176,7 @@ where
     pub fn sort(&self) -> Mapping {
         let mut mapping: Vec<u32> = (0..self.slices() as u32).collect();
         mapping.sort_by_cached_key(|i| CustomSliceOrd(self.lookup(InternedSlice::new(*i))));
-        let reverse = ReverseMapping(mapping.into_boxed_slice());
+        let reverse = ReverseMapping::new(mapping.into_boxed_slice());
         let forward = reverse.reverse();
         Mapping { forward, reverse }
     }
@@ -336,7 +344,7 @@ impl<H> ArenaStr<H> {
     pub fn sort(&self) -> Mapping {
         let mut mapping: Vec<u32> = (0..self.strings() as u32).collect();
         mapping.sort_by_cached_key(|i| CustomStrOrd(self.lookup(InternedStr::new(*i))));
-        let reverse = ReverseMapping(mapping.into_boxed_slice());
+        let reverse = ReverseMapping::new(mapping.into_boxed_slice());
         let forward = reverse.reverse();
         Mapping { forward, reverse }
     }
@@ -456,6 +464,14 @@ pub struct Mapping {
 }
 
 impl Mapping {
+    /// Creates a new identity mapping with the given number of items.
+    pub fn identity(count: u32) -> Self {
+        Self {
+            forward: ForwardMapping::identity(count),
+            reverse: ReverseMapping::identity(count),
+        }
+    }
+
     /// Checks wether this mapping is the identity.
     pub fn is_identity(&self) -> bool {
         self.forward.is_identity()
@@ -532,7 +548,7 @@ impl Mapping {
             }
         }
 
-        let reverse = ReverseMapping(reverse.into_boxed_slice());
+        let reverse = ReverseMapping::new(reverse.into_boxed_slice());
         let forward = if is_identity {
             MappingImpl::Identity(len as u32)
         } else {
@@ -547,34 +563,30 @@ impl Mapping {
 
 /// A mapping to re-order items in an [`Arena`], [`ArenaSlice`] or [`ArenaStr`].
 #[cfg_attr(test, derive(PartialEq, Eq, Debug))]
-pub struct ReverseMapping(Box<[u32]>);
+pub struct ReverseMapping(MappingImpl);
 
 impl ReverseMapping {
+    /// Creates a new identity mapping with the given number of items.
+    fn identity(count: u32) -> Self {
+        Self(MappingImpl::Identity(count))
+    }
+
+    fn new(map: Box<[u32]>) -> Self {
+        Self(MappingImpl::new(map))
+    }
+
     /// Returns the number of mapped items.
     fn len(&self) -> usize {
-        self.0.len()
+        self.0.len() as usize
     }
 
     fn reverse(&self) -> ForwardMapping {
-        if self.is_identity() {
-            ForwardMapping(MappingImpl::Identity(self.0.len() as u32))
-        } else {
-            let mut reverse = vec![0; self.0.len()];
-            for i in 0..self.0.len() as u32 {
-                reverse[self.0[i as usize] as usize] = i;
-            }
-            ForwardMapping(MappingImpl::Map(reverse.into_boxed_slice()))
-        }
-    }
-
-    /// Checks wether this mapping is the identity.
-    fn is_identity(&self) -> bool {
-        self.0.iter().enumerate().all(|(i, j)| i == *j as usize)
+        ForwardMapping(self.0.reverse())
     }
 
     /// Returns the mapped indices in order.
     pub fn iter(&self) -> impl ExactSizeIterator<Item = u32> {
-        self.0.iter().copied()
+        self.0.iter()
     }
 }
 
@@ -669,6 +681,15 @@ enum MappingImpl {
 }
 
 impl MappingImpl {
+    fn new(map: Box<[u32]>) -> Self {
+        // Check if the map is the identity.
+        if map.iter().enumerate().all(|(i, j)| i == *j as usize) {
+            MappingImpl::Identity(map.len() as u32)
+        } else {
+            MappingImpl::Map(map)
+        }
+    }
+
     /// Checks wether this mapping is the identity.
     fn is_identity(&self) -> bool {
         match self {
@@ -692,14 +713,36 @@ impl MappingImpl {
     }
 
     fn compose(self, other: MappingImpl) -> Self {
-        assert_eq!(self.len(), other.len());
+        let len = self.len();
+        assert_eq!(len, other.len());
         match (self, other) {
             (MappingImpl::Identity(len), MappingImpl::Identity(_)) => MappingImpl::Identity(len),
             (MappingImpl::Map(map), MappingImpl::Identity(_))
             | (MappingImpl::Identity(_), MappingImpl::Map(map)) => MappingImpl::Map(map),
             (MappingImpl::Map(left), MappingImpl::Map(right)) => {
-                MappingImpl::Map(left.iter().map(|i| right[*i as usize]).collect())
+                let map = left.iter().map(|i| right[*i as usize]).collect();
+                Self::new(map)
             }
+        }
+    }
+
+    fn reverse(&self) -> MappingImpl {
+        match self {
+            MappingImpl::Identity(len) => MappingImpl::Identity(*len),
+            MappingImpl::Map(map) => {
+                let mut reverse = vec![0; map.len()];
+                for i in 0..map.len() as u32 {
+                    reverse[map[i as usize] as usize] = i;
+                }
+                MappingImpl::Map(reverse.into_boxed_slice())
+            }
+        }
+    }
+
+    fn iter(&self) -> impl ExactSizeIterator<Item = u32> {
+        match self {
+            Self::Identity(len) => Either::Left(0..*len),
+            Self::Map(map) => Either::Right(map.iter().copied()),
         }
     }
 
@@ -736,7 +779,7 @@ mod test {
         assert!(!mapping.is_identity());
         assert_eq!(
             mapping.reverse,
-            ReverseMapping(vec![2, 1, 4, 0, 3].into_boxed_slice())
+            ReverseMapping(MappingImpl::Map(vec![2, 1, 4, 0, 3].into_boxed_slice()))
         );
         assert_eq!(
             mapping.forward,
@@ -755,10 +798,7 @@ mod test {
 
         let mapping = arena.sort();
         assert!(mapping.is_identity());
-        assert_eq!(
-            mapping.reverse,
-            ReverseMapping(vec![0, 1, 2, 3, 4].into_boxed_slice())
-        );
+        assert_eq!(mapping.reverse, ReverseMapping(MappingImpl::Identity(5)));
         assert_eq!(mapping.forward, ForwardMapping(MappingImpl::Identity(5)));
     }
 
@@ -782,6 +822,24 @@ mod test {
         expected.push("aaaaa");
 
         assert_eq!(sorted, expected);
+    }
+
+    #[test]
+    fn arena_str_retain_identity() {
+        let mut arena: ArenaStr = ArenaStr::default();
+        arena.push("e");
+        arena.push("dd");
+        arena.push("ccc");
+        arena.push("bbbb");
+        arena.push("aaaaa");
+
+        let mapping = arena.retain(|i| arena.lookup(i).len() <= 3);
+        assert!(!mapping.is_identity());
+        assert_eq!(mapping.reverse, ReverseMapping(MappingImpl::Identity(3)));
+        assert_eq!(
+            mapping.forward,
+            ForwardMapping(MappingImpl::Map(Box::new([0, 1, 2, u32::MAX, u32::MAX])))
+        );
     }
 
     #[test]
@@ -874,25 +932,25 @@ mod test {
 
     #[test]
     fn reverse_mapping_iter() {
-        let mapping = ReverseMapping(vec![2, 1, 4, 0, 3].into_boxed_slice());
+        let mapping = ReverseMapping(MappingImpl::new(Box::new([2, 1, 4, 0, 3])));
         assert_eq!(mapping.iter().collect::<Vec<_>>(), vec![2, 1, 4, 0, 3]);
     }
 
     #[test]
     fn reverse_mapping_reverse() {
-        let mapping = ReverseMapping(vec![2, 1, 4, 0, 3].into_boxed_slice());
+        let mapping = ReverseMapping(MappingImpl::new(Box::new([2, 1, 4, 0, 3])));
         assert_eq!(
             mapping.reverse(),
-            ForwardMapping(MappingImpl::Map(vec![3, 1, 0, 4, 2].into_boxed_slice()))
+            ForwardMapping(MappingImpl::Map(Box::new([3, 1, 0, 4, 2])))
         );
 
-        let mapping = ReverseMapping(vec![0, 1, 2, 3, 4].into_boxed_slice());
+        let mapping = ReverseMapping(MappingImpl::new(Box::new([0, 1, 2, 3, 4])));
         assert_eq!(mapping.reverse(), ForwardMapping(MappingImpl::Identity(5)));
     }
 
     #[test]
     fn forward_mapping_map() {
-        let mapping = ForwardMapping(MappingImpl::Map(vec![3, 1, 0, 4, 2].into_boxed_slice()));
+        let mapping = ForwardMapping(MappingImpl::Map(Box::new([3, 1, 0, 4, 2])));
         assert_eq!(mapping.map(InternedU32::new(0)), InternedU32::new(3));
         assert_eq!(mapping.map(InternedU32::new(1)), InternedU32::new(1));
         assert_eq!(mapping.map(InternedU32::new(2)), InternedU32::new(0));
@@ -909,12 +967,12 @@ mod test {
 
     #[test]
     fn forward_mapping_compose() {
-        let mapping1 = ForwardMapping(MappingImpl::Map(vec![3, 1, 0, 4, 2].into_boxed_slice()));
-        let mapping2 = ForwardMapping(MappingImpl::Map(vec![4, 0, 2, 3, 1].into_boxed_slice()));
+        let mapping1 = ForwardMapping(MappingImpl::Map(Box::new([3, 1, 0, 4, 2])));
+        let mapping2 = ForwardMapping(MappingImpl::Map(Box::new([4, 0, 2, 3, 1])));
         let composed = mapping1.clone().compose(mapping2.clone());
         assert_eq!(
             composed,
-            ForwardMapping(MappingImpl::Map(vec![3, 0, 4, 1, 2].into_boxed_slice()))
+            ForwardMapping(MappingImpl::Map(Box::new([3, 0, 4, 1, 2])))
         );
 
         for i in 0..5 {
@@ -926,7 +984,7 @@ mod test {
     #[cfg(feature = "debug")]
     #[test]
     fn forward_mapping_count_remapped() {
-        let mapping = ForwardMapping(MappingImpl::Map(vec![3, 1, 0, 4, 2].into_boxed_slice()));
+        let mapping = ForwardMapping(MappingImpl::Map(Box::new([3, 1, 0, 4, 2])));
         assert_eq!(mapping.count_remapped(), 4);
     }
 }

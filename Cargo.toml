@@ -30,6 +30,7 @@ sync = ["dep:appendvec", "dep:dashtable"]
 appendvec = { optional = true, version = "0.1.6" }
 bit-set = { optional = true, version = "0.11.1", default-features = false }
 dashtable = { optional = true, version = "0.2.1" }
+either = { version = "1.17.0", default-features = false }
 get-size2 = { optional = true, version = "0.11.0", default-features = false, features = ["alloc", "derive", "hashbrown"] }
 hashbrown = "0.17.1"
 serde = { optional = true, version = "1.0.229", default-features = false, features = ["derive"] }
