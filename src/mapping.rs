@@ -64,9 +64,23 @@ where
     Storage: Borrow<T> + Clone,
 {
     /// Returns a re-ordered version of this arena based on the given mapping.
+    ///
+    /// See also [`map_rehash()`](Self::map_rehash) to use a different hash
+    /// function in the resulting arena.
     pub fn map(&self, mapping: &ReverseMapping) -> Self
     where
         H: Default + BuildHasher,
+    {
+        self.map_rehash(mapping)
+    }
+
+    /// Returns a re-ordered version of this arena based on the given mapping.
+    ///
+    /// See also [`map()`](Self::map) if the resulting arena uses the same hash
+    /// function.
+    pub fn map_rehash<I>(&self, mapping: &ReverseMapping) -> Arena<T, Storage, I>
+    where
+        I: Default + BuildHasher,
     {
         let mut arena = Arena::with_capacity(mapping.len());
         for i in mapping.iter() {
@@ -82,9 +96,33 @@ where
     /// The transformation function should be injective, i.e. different inputs
     /// should map to different outputs. Otherwise a value may appear twice in
     /// the resulting arena.
+    ///
+    /// See also [`map2_rehash()`](Self::map2_rehash) to use a different hash
+    /// function in the resulting arena.
     pub fn map2(&self, mapping: &ReverseMapping, f: impl Fn(&T) -> Storage) -> Self
     where
         H: Default + BuildHasher,
+    {
+        self.map2_rehash(mapping, f)
+    }
+
+    /// Returns a re-ordered version of this arena based on the given mapping,
+    /// where each item is additionally transformed according to the given
+    /// function `f`.
+    ///
+    /// The transformation function should be injective, i.e. different inputs
+    /// should map to different outputs. Otherwise a value may appear twice in
+    /// the resulting arena.
+    ///
+    /// See also [`map2()`](Self::map2) if the resulting arena uses the same
+    /// hash function.
+    pub fn map2_rehash<I>(
+        &self,
+        mapping: &ReverseMapping,
+        f: impl Fn(&T) -> Storage,
+    ) -> Arena<T, Storage, I>
+    where
+        I: Default + BuildHasher,
     {
         let mut arena = Arena::with_capacity(mapping.len());
         for i in mapping.iter() {
@@ -174,9 +212,23 @@ where
     T: Default + Clone + Eq + Hash,
 {
     /// Returns a re-ordered version of this arena based on the given mapping.
+    ///
+    /// See also [`map_rehash()`](Self::map_rehash) to use a different hash
+    /// function in the resulting arena.
     pub fn map(&self, mapping: &ReverseMapping) -> Self
     where
         H: Default + BuildHasher,
+    {
+        self.map_rehash(mapping)
+    }
+
+    /// Returns a re-ordered version of this arena based on the given mapping.
+    ///
+    /// See also [`map()`](Self::map) if the resulting arena uses the same hash
+    /// function.
+    pub fn map_rehash<I>(&self, mapping: &ReverseMapping) -> ArenaSlice<T, I>
+    where
+        I: Default + BuildHasher,
     {
         let mut arena = ArenaSlice::with_capacity(mapping.len(), self.items());
         for i in mapping.iter() {
@@ -197,9 +249,29 @@ where
     /// The transformation function should be injective, i.e. different inputs
     /// should map to different outputs. Otherwise a value may appear twice in
     /// the resulting arena.
+    ///
+    /// See also [`map2_rehash()`](Self::map2_rehash) to use a different hash
+    /// function in the resulting arena.
     pub fn map2(&self, mapping: &ReverseMapping, f: impl Fn(&T) -> T) -> Self
     where
         H: Default + BuildHasher,
+    {
+        self.map2_rehash(mapping, f)
+    }
+
+    /// Returns a re-ordered version of this arena based on the given mapping,
+    /// where each slice element is additionally transformed according to
+    /// the given function `f`.
+    ///
+    /// The transformation function should be injective, i.e. different inputs
+    /// should map to different outputs. Otherwise a value may appear twice in
+    /// the resulting arena.
+    ///
+    /// See also [`map2()`](Self::map2) if the resulting arena uses the same
+    /// hash function.
+    pub fn map2_rehash<I>(&self, mapping: &ReverseMapping, f: impl Fn(&T) -> T) -> ArenaSlice<T, I>
+    where
+        I: Default + BuildHasher,
     {
         let mut arena = ArenaSlice::with_capacity(mapping.len(), self.items());
         for i in mapping.iter() {
@@ -303,9 +375,23 @@ impl<H> ArenaStr<H> {
 
 impl<H> ArenaStr<H> {
     /// Returns a re-ordered version of this arena based on the given mapping.
+    ///
+    /// See also [`map_rehash()`](Self::map_rehash) to use a different hash
+    /// function in the resulting arena.
     pub fn map(&self, mapping: &ReverseMapping) -> Self
     where
         H: Default + BuildHasher,
+    {
+        self.map_rehash(mapping)
+    }
+
+    /// Returns a re-ordered version of this arena based on the given mapping.
+    ///
+    /// See also [`map()`](Self::map) if the resulting arena uses the same hash
+    /// function.
+    pub fn map_rehash<I>(&self, mapping: &ReverseMapping) -> ArenaStr<I>
+    where
+        I: Default + BuildHasher,
     {
         let mut arena = ArenaStr::with_capacity(mapping.len(), self.bytes());
         for i in mapping.iter() {
@@ -376,6 +462,9 @@ impl Mapping {
     }
 
     /// Maps the given interned handle to a handle for the re-ordered arena.
+    ///
+    /// See also [`map_rehash()`](Self::map_rehash) if the resulting arena uses
+    /// a different hash function.
     pub fn map<T: ?Sized, Storage, H>(
         &self,
         index: Interned<T, Storage, H>,
@@ -384,13 +473,46 @@ impl Mapping {
     }
 
     /// Maps the given interned handle to a handle for the re-ordered arena.
+    ///
+    /// See also [`map_slice_rehash()`](Self::map_slice_rehash) if the resulting
+    /// arena uses a different hash function.
     pub fn map_slice<T, H>(&self, index: InternedSlice<T, H>) -> InternedSlice<T, H> {
         self.forward.map_slice(index)
     }
 
     /// Maps the given interned handle to a handle for the re-ordered arena.
+    ///
+    /// See also [`map_str_rehash()`](Self::map_str_rehash) if the resulting
+    /// arena uses a different hash function.
     pub fn map_str<H>(&self, index: InternedStr<H>) -> InternedStr<H> {
         self.forward.map_str(index)
+    }
+
+    /// Maps the given interned handle to a handle for the re-ordered arena.
+    ///
+    /// See also [`map()`](Self::map) if the resulting arena uses the same hash
+    /// function.
+    pub fn map_rehash<T: ?Sized, Storage, H, I>(
+        &self,
+        index: Interned<T, Storage, H>,
+    ) -> Interned<T, Storage, I> {
+        self.forward.map_rehash(index)
+    }
+
+    /// Maps the given interned handle to a handle for the re-ordered arena.
+    ///
+    /// See also [`map_slice()`](Self::map_slice) if the resulting arena uses
+    /// the same hash function.
+    pub fn map_slice_rehash<T, H, I>(&self, index: InternedSlice<T, H>) -> InternedSlice<T, I> {
+        self.forward.map_slice_rehash(index)
+    }
+
+    /// Maps the given interned handle to a handle for the re-ordered arena.
+    ///
+    /// See also [`map_str()`](Self::map_str) if the resulting arena uses the
+    /// same hash function.
+    pub fn map_str_rehash<H, I>(&self, index: InternedStr<H>) -> InternedStr<I> {
+        self.forward.map_str_rehash(index)
     }
 
     fn retain(len: usize, filter: impl Fn(u32) -> bool) -> Self {
@@ -472,20 +594,56 @@ impl ForwardMapping {
     }
 
     /// Maps the given interned handle to a handle for the re-ordered arena.
+    ///
+    /// See also [`map_rehash()`](Self::map_rehash) if the resulting arena uses
+    /// a different hash function.
     pub fn map<T: ?Sized, Storage, H>(
         &self,
         index: Interned<T, Storage, H>,
     ) -> Interned<T, Storage, H> {
+        self.map_rehash(index)
+    }
+
+    /// Maps the given interned handle to a handle for the re-ordered arena.
+    ///
+    /// See also [`map_slice_rehash()`](Self::map_slice_rehash) if the resulting
+    /// arena uses a different hash function.
+    pub fn map_slice<T, H>(&self, index: InternedSlice<T, H>) -> InternedSlice<T, H> {
+        self.map_slice_rehash(index)
+    }
+
+    /// Maps the given interned handle to a handle for the re-ordered arena.
+    ///
+    /// See also [`map_str_rehash()`](Self::map_str_rehash) if the resulting
+    /// arena uses a different hash function.
+    pub fn map_str<H>(&self, index: InternedStr<H>) -> InternedStr<H> {
+        self.map_str_rehash(index)
+    }
+
+    /// Maps the given interned handle to a handle for the re-ordered arena.
+    ///
+    /// See also [`map()`](Self::map) if the resulting arena uses the same hash
+    /// function.
+    pub fn map_rehash<T: ?Sized, Storage, H, I>(
+        &self,
+        index: Interned<T, Storage, H>,
+    ) -> Interned<T, Storage, I> {
         Interned::new(self.0.at(index.id_()))
     }
 
     /// Maps the given interned handle to a handle for the re-ordered arena.
-    pub fn map_slice<T, H>(&self, index: InternedSlice<T, H>) -> InternedSlice<T, H> {
+    ///
+    /// See also [`map_slice()`](Self::map_slice) if the resulting arena uses
+    /// the same hash function.
+    pub fn map_slice_rehash<T, H, I>(&self, index: InternedSlice<T, H>) -> InternedSlice<T, I> {
         InternedSlice::new(self.0.at(index.id_()))
     }
 
     /// Maps the given interned handle to a handle for the re-ordered arena.
-    pub fn map_str<H>(&self, index: InternedStr<H>) -> InternedStr<H> {
+    ///
+    /// See also [`map_str()`](Self::map_str) if the resulting arena uses the
+    /// same hash function.
+    pub fn map_str_rehash<H, I>(&self, index: InternedStr<H>) -> InternedStr<I> {
         InternedStr::new(self.0.at(index.id_()))
     }
 
