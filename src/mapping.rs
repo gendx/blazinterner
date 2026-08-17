@@ -10,6 +10,8 @@ use core::hash::{BuildHasher, Hash};
 #[cfg(feature = "retain")]
 use core::marker::PhantomData;
 use either::Either;
+#[cfg(feature = "retain")]
+use hashbrown::DefaultHashBuilder;
 
 impl<T: ?Sized, Storage, H> Arena<T, Storage, H>
 where
@@ -145,7 +147,7 @@ where
 /// This struct is created by the [`retain_builder()`](Arena::retain_builder)
 /// method on [`Arena`].
 #[cfg(feature = "retain")]
-pub struct RetainBuilder<T: ?Sized, Storage, H> {
+pub struct RetainBuilder<T: ?Sized, Storage = T, H = DefaultHashBuilder> {
     len: usize,
     retained: BitSet,
     _phantom: PhantomData<Interned<T, Storage, H>>,
@@ -298,7 +300,7 @@ where
 /// This struct is created by the
 /// [`retain_builder()`](ArenaSlice::retain_builder) method on [`ArenaSlice`].
 #[cfg(feature = "retain")]
-pub struct RetainSliceBuilder<T, H> {
+pub struct RetainSliceBuilder<T, H = DefaultHashBuilder> {
     len: usize,
     retained: BitSet,
     _phantom: PhantomData<InternedSlice<T, H>>,
@@ -414,7 +416,7 @@ impl<H> ArenaStr<H> {
 /// This struct is created by the [`retain_builder()`](ArenaStr::retain_builder)
 /// method on [`ArenaStr`].
 #[cfg(feature = "retain")]
-pub struct RetainStrBuilder<H> {
+pub struct RetainStrBuilder<H = DefaultHashBuilder> {
     len: usize,
     retained: BitSet,
     _phantom: PhantomData<InternedStr<H>>,
