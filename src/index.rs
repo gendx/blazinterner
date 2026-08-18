@@ -3,6 +3,8 @@ use core::fmt::Debug;
 use core::hash::Hash;
 use core::ops::{AddAssign, Sub};
 #[cfg(feature = "serde")]
+use serde::de::{self, Unexpected};
+#[cfg(feature = "serde")]
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// Interface to index values in an arena.
@@ -162,7 +164,9 @@ macro_rules! impl_index {
                 D: Deserializer<'de>,
             {
                 let i = Deserialize::deserialize(deserializer)?;
-                Ok(Self::from_uint(i))
+                Self::try_from_uint(i).ok_or_else(|| {
+                    de::Error::invalid_value(Unexpected::Unsigned(i.into()), &Self::EXPECTED)
+                })
             }
         }
     };
@@ -173,17 +177,25 @@ macro_rules! impl_index {
 pub struct U24([u8; 3]);
 
 impl U24 {
+    #[cfg(feature = "serde")]
+    const EXPECTED: &str = "a 24-bit integer";
+
     #[inline(always)]
     fn from_uint(x: u32) -> Self {
+        Self::try_from_uint(x).expect("Integer overflow while converting u32 to u24")
+    }
+
+    #[inline(always)]
+    fn try_from_uint(x: u32) -> Option<Self> {
         if x >= 1 << 24 {
-            panic!("Integer overflow while converting u32 to u24");
+            return None;
         }
         if cfg!(target_endian = "big") {
             let [_, a, b, c] = x.to_ne_bytes();
-            Self([a, b, c])
+            Some(Self([a, b, c]))
         } else {
             let [a, b, c, _] = x.to_ne_bytes();
-            Self([a, b, c])
+            Some(Self([a, b, c]))
         }
     }
 
@@ -205,17 +217,25 @@ impl_index!(U24, u32, 3);
 pub struct U40([u8; 5]);
 
 impl U40 {
+    #[cfg(feature = "serde")]
+    const EXPECTED: &str = "a 40-bit integer";
+
     #[inline(always)]
     fn from_uint(x: u64) -> Self {
+        Self::try_from_uint(x).expect("Integer overflow while converting u64 to u40")
+    }
+
+    #[inline(always)]
+    fn try_from_uint(x: u64) -> Option<Self> {
         if x >= 1 << 40 {
-            panic!("Integer overflow while converting u64 to u40");
+            return None;
         }
         if cfg!(target_endian = "big") {
             let [_, _, _, a, b, c, d, e] = x.to_ne_bytes();
-            Self([a, b, c, d, e])
+            Some(Self([a, b, c, d, e]))
         } else {
             let [a, b, c, d, e, _, _, _] = x.to_ne_bytes();
-            Self([a, b, c, d, e])
+            Some(Self([a, b, c, d, e]))
         }
     }
 
@@ -237,17 +257,25 @@ impl_index!(U40, u64, 5);
 pub struct U48([u8; 6]);
 
 impl U48 {
+    #[cfg(feature = "serde")]
+    const EXPECTED: &str = "a 48-bit integer";
+
     #[inline(always)]
     fn from_uint(x: u64) -> Self {
+        Self::try_from_uint(x).expect("Integer overflow while converting u64 to u48")
+    }
+
+    #[inline(always)]
+    fn try_from_uint(x: u64) -> Option<Self> {
         if x >= 1 << 48 {
-            panic!("Integer overflow while converting u64 to u48");
+            return None;
         }
         if cfg!(target_endian = "big") {
             let [_, _, a, b, c, d, e, f] = x.to_ne_bytes();
-            Self([a, b, c, d, e, f])
+            Some(Self([a, b, c, d, e, f]))
         } else {
             let [a, b, c, d, e, f, _, _] = x.to_ne_bytes();
-            Self([a, b, c, d, e, f])
+            Some(Self([a, b, c, d, e, f]))
         }
     }
 
@@ -269,17 +297,25 @@ impl_index!(U48, u64, 6);
 pub struct U56([u8; 7]);
 
 impl U56 {
+    #[cfg(feature = "serde")]
+    const EXPECTED: &str = "a 56-bit integer";
+
     #[inline(always)]
     fn from_uint(x: u64) -> Self {
+        Self::try_from_uint(x).expect("Integer overflow while converting u64 to u56")
+    }
+
+    #[inline(always)]
+    fn try_from_uint(x: u64) -> Option<Self> {
         if x >= 1 << 56 {
-            panic!("Integer overflow while converting u64 to u56");
+            return None;
         }
         if cfg!(target_endian = "big") {
             let [_, a, b, c, d, e, f, g] = x.to_ne_bytes();
-            Self([a, b, c, d, e, f, g])
+            Some(Self([a, b, c, d, e, f, g]))
         } else {
             let [a, b, c, d, e, f, g, _] = x.to_ne_bytes();
-            Self([a, b, c, d, e, f, g])
+            Some(Self([a, b, c, d, e, f, g]))
         }
     }
 
