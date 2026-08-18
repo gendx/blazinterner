@@ -1533,44 +1533,45 @@ mod test {
 
     #[test]
     fn test_intern_mut_lookup() {
-        let mut arena: ArenaSlice<u32> = ArenaSlice::default();
+        let mut arena: ArenaSlice<usize> = ArenaSlice::default();
         for i in 0..100 {
-            let slice = vec![i; i as usize];
-            assert_eq!(arena.intern_mut(&slice).id, i);
+            let slice = vec![i; i];
+            assert_eq!(arena.intern_mut(&slice).id.to_usize(), i);
         }
         for i in 0..100 {
-            let slice = arena.lookup(InternedSlice::new(i));
-            let expected = vec![i; i as usize];
+            let slice = arena.lookup(InternedSlice::new(Index::from_usize(i)));
+            let expected = vec![i; i];
             assert_eq!(slice, &expected);
         }
     }
 
     #[cfg(all(feature = "raw", not(miri)))]
-    const NUM_ITERS: u32 = 100;
+    const NUM_ITERS: usize = 100;
     #[cfg(all(feature = "raw", miri))]
-    const NUM_ITERS: u32 = 20;
+    const NUM_ITERS: usize = 20;
     #[cfg(all(feature = "raw", not(miri)))]
-    const NUM_VALUES: u32 = 50;
+    const NUM_VALUES: usize = 50;
     #[cfg(all(feature = "raw", miri))]
-    const NUM_VALUES: u32 = 10;
+    const NUM_VALUES: usize = 10;
 
     #[cfg(feature = "raw")]
     #[test]
     fn test_push_mut_same_value_works() {
-        let mut arena: ArenaSlice<u32> = ArenaSlice::default();
+        let mut arena: ArenaSlice<usize> = ArenaSlice::default();
         for i in 0..NUM_ITERS {
             for j in 0..NUM_VALUES {
-                let slice = vec![j; j as usize];
-                assert_eq!(arena.push_mut(&slice), i * NUM_VALUES + j);
+                let slice = vec![j; j];
+                assert_eq!(arena.push_mut(&slice).to_usize(), i * NUM_VALUES + j);
                 let id = arena.intern_mut(&slice).id;
+                let id = id.to_usize();
                 assert_eq!(id % NUM_VALUES, j);
                 assert!(id / NUM_VALUES <= i);
             }
         }
         for i in 0..NUM_ITERS {
             for j in 0..NUM_VALUES {
-                let slice = arena.lookup(InternedSlice::new(i * NUM_VALUES + j));
-                let expected = vec![j; j as usize];
+                let slice = arena.lookup(InternedSlice::new(Index::from_usize(i * NUM_VALUES + j)));
+                let expected = vec![j; j];
                 assert_eq!(slice, &expected);
             }
         }

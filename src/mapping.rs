@@ -807,8 +807,9 @@ impl<I: Index> MappingImpl<I> {
 #[cfg(test)]
 mod test {
     use super::*;
+    use hashbrown::DefaultHashBuilder;
 
-    type InternedU32 = Interned<u32>;
+    type InternedU32 = Interned<u32, u32, DefaultHashBuilder, u32>;
 
     #[test]
     fn arena_str_sort() {
@@ -823,11 +824,15 @@ mod test {
         assert!(!mapping.is_identity());
         assert_eq!(
             mapping.reverse,
-            ReverseMapping(MappingImpl::Map(vec![2, 1, 4, 0, 3].into_boxed_slice()))
+            ReverseMapping(MappingImpl::Map(
+                [2, 1, 4, 0, 3].into_iter().map(Index::from_usize).collect()
+            ))
         );
         assert_eq!(
             mapping.forward,
-            ForwardMapping(MappingImpl::Map(vec![3, 1, 0, 4, 2].into_boxed_slice()))
+            ForwardMapping(MappingImpl::Map(
+                [3, 1, 0, 4, 2].into_iter().map(Index::from_usize).collect()
+            ))
         );
     }
 
@@ -842,8 +847,14 @@ mod test {
 
         let mapping = arena.sort();
         assert!(mapping.is_identity());
-        assert_eq!(mapping.reverse, ReverseMapping(MappingImpl::Identity(5)));
-        assert_eq!(mapping.forward, ForwardMapping(MappingImpl::Identity(5)));
+        assert_eq!(
+            mapping.reverse,
+            ReverseMapping(MappingImpl::Identity(Index::from_usize(5)))
+        );
+        assert_eq!(
+            mapping.forward,
+            ForwardMapping(MappingImpl::Identity(Index::from_usize(5)))
+        );
     }
 
     #[test]
@@ -879,10 +890,19 @@ mod test {
 
         let mapping = arena.retain(|i| arena.lookup(i).len() <= 3);
         assert!(!mapping.is_identity());
-        assert_eq!(mapping.reverse, ReverseMapping(MappingImpl::Identity(3)));
+        assert_eq!(
+            mapping.reverse,
+            ReverseMapping(MappingImpl::Identity(Index::from_usize(3)))
+        );
         assert_eq!(
             mapping.forward,
-            ForwardMapping(MappingImpl::Map(Box::new([0, 1, 2, u32::MAX, u32::MAX])))
+            ForwardMapping(MappingImpl::Map(Box::new([
+                Index::from_usize(0),
+                Index::from_usize(1),
+                Index::from_usize(2),
+                Index::MAX,
+                Index::MAX
+            ])))
         );
     }
 

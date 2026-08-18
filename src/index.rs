@@ -2,6 +2,8 @@ use core::cmp::Ordering;
 use core::fmt::Debug;
 use core::hash::Hash;
 use core::ops::{AddAssign, Sub};
+#[cfg(feature = "serde")]
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// Interface to index values in an arena.
 pub trait Index: Debug + Copy + Eq + Ord + Hash + AddAssign + Sub<Output = Self> {
@@ -140,6 +142,27 @@ macro_rules! impl_index {
             fn strict_add(self, other: Self) -> Self {
                 // The inner addition cannot overflow.
                 Self::from_uint(self.to_uint() + other.to_uint())
+            }
+        }
+
+        #[cfg(feature = "serde")]
+        impl Serialize for $typ {
+            fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+            where
+                S: Serializer,
+            {
+                self.to_uint().serialize(serializer)
+            }
+        }
+
+        #[cfg(feature = "serde")]
+        impl<'de> Deserialize<'de> for $typ {
+            fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+            where
+                D: Deserializer<'de>,
+            {
+                let i = Deserialize::deserialize(deserializer)?;
+                Ok(Self::from_uint(i))
             }
         }
     };

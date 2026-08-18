@@ -922,7 +922,8 @@ mod test {
     #[cfg(feature = "sync")]
     use std::thread;
 
-    fn make_utf8_string(mut i: u32) -> String {
+    fn make_utf8_string(i: usize) -> String {
+        let mut i = i as u32;
         let mut s = String::new();
         while i != 0 {
             let j = i % (64 + 26);
@@ -988,10 +989,13 @@ mod test {
     fn test_intern_lookup() {
         let arena: ArenaStr = ArenaStr::default();
         for i in 0..100 {
-            assert_eq!(arena.intern(&make_utf8_string(i)).id, i);
+            assert_eq!(arena.intern(&make_utf8_string(i)).id.to_usize(), i);
         }
         for i in 0..100 {
-            assert_eq!(arena.lookup(InternedStr::new(i)), &make_utf8_string(i));
+            assert_eq!(
+                arena.lookup(InternedStr::new(Index::from_usize(i))),
+                &make_utf8_string(i)
+            );
         }
     }
 
@@ -999,21 +1003,24 @@ mod test {
     fn test_intern_mut_lookup() {
         let mut arena: ArenaStr = ArenaStr::default();
         for i in 0..100 {
-            assert_eq!(arena.intern_mut(&make_utf8_string(i)).id, i);
+            assert_eq!(arena.intern_mut(&make_utf8_string(i)).id.to_usize(), i);
         }
         for i in 0..100 {
-            assert_eq!(arena.lookup(InternedStr::new(i)), &make_utf8_string(i));
+            assert_eq!(
+                arena.lookup(InternedStr::new(Index::from_usize(i))),
+                &make_utf8_string(i)
+            );
         }
     }
 
     #[cfg(all(feature = "raw", not(miri)))]
-    const NUM_ITERS: u32 = 100;
+    const NUM_ITERS: usize = 100;
     #[cfg(all(feature = "raw", miri))]
-    const NUM_ITERS: u32 = 20;
+    const NUM_ITERS: usize = 20;
     #[cfg(all(feature = "raw", not(miri)))]
-    const NUM_VALUES: u32 = 50;
+    const NUM_VALUES: usize = 50;
     #[cfg(all(feature = "raw", miri))]
-    const NUM_VALUES: u32 = 10;
+    const NUM_VALUES: usize = 10;
 
     #[cfg(feature = "raw")]
     #[test]
@@ -1022,8 +1029,9 @@ mod test {
         for i in 0..NUM_ITERS {
             for j in 0..NUM_VALUES {
                 let s = make_utf8_string(j);
-                assert_eq!(arena.push_mut(&s), i * NUM_VALUES + j);
+                assert_eq!(arena.push_mut(&s).to_usize(), i * NUM_VALUES + j);
                 let id = arena.intern_mut(&s).id;
+                let id = id.to_usize();
                 assert_eq!(id % NUM_VALUES, j);
                 assert!(id / NUM_VALUES <= i);
             }
@@ -1031,7 +1039,7 @@ mod test {
         for i in 0..NUM_ITERS {
             for j in 0..NUM_VALUES {
                 assert_eq!(
-                    arena.lookup(InternedStr::new(i * NUM_VALUES + j)),
+                    arena.lookup(InternedStr::new(Index::from_usize(i * NUM_VALUES + j))),
                     &make_utf8_string(j)
                 );
             }
@@ -1057,9 +1065,9 @@ mod test {
                     loop {
                         let len = arena.strings();
                         if len > 0 {
-                            let last = len as u32 - 1;
+                            let last = len - 1;
                             assert_eq!(
-                                arena.lookup(InternedStr::new(last)),
+                                arena.lookup(InternedStr::new(Index::from_usize(last))),
                                 &make_utf8_string(last)
                             );
                             if len == NUM_ITEMS {
@@ -1070,8 +1078,8 @@ mod test {
                 });
             }
             s.spawn(|| {
-                for j in 0..NUM_ITEMS as u32 {
-                    assert_eq!(arena.intern(&make_utf8_string(j)).id, j);
+                for j in 0..NUM_ITEMS {
+                    assert_eq!(arena.intern(&make_utf8_string(j)).id.to_usize(), j);
                 }
             });
         });
@@ -1086,9 +1094,9 @@ mod test {
                 loop {
                     let len = arena.strings();
                     if len > 0 {
-                        let last = len as u32 - 1;
+                        let last = len - 1;
                         assert_eq!(
-                            arena.lookup(InternedStr::new(last)),
+                            arena.lookup(InternedStr::new(Index::from_usize(last))),
                             &make_utf8_string(last)
                         );
                         if len == NUM_ITEMS {
@@ -1099,8 +1107,8 @@ mod test {
             });
             for _ in 0..NUM_WRITERS {
                 s.spawn(|| {
-                    for j in 0..NUM_ITEMS as u32 {
-                        assert_eq!(arena.intern(&make_utf8_string(j)).id, j);
+                    for j in 0..NUM_ITEMS {
+                        assert_eq!(arena.intern(&make_utf8_string(j)).id.to_usize(), j);
                     }
                 });
             }
@@ -1117,9 +1125,9 @@ mod test {
                     loop {
                         let len = arena.strings();
                         if len > 0 {
-                            let last = len as u32 - 1;
+                            let last = len - 1;
                             assert_eq!(
-                                arena.lookup(InternedStr::new(last)),
+                                arena.lookup(InternedStr::new(Index::from_usize(last))),
                                 &make_utf8_string(last)
                             );
                             if len == NUM_ITEMS {
@@ -1131,8 +1139,8 @@ mod test {
             }
             for _ in 0..NUM_WRITERS {
                 s.spawn(|| {
-                    for j in 0..NUM_ITEMS as u32 {
-                        assert_eq!(arena.intern(&make_utf8_string(j)).id, j);
+                    for j in 0..NUM_ITEMS {
+                        assert_eq!(arena.intern(&make_utf8_string(j)).id.to_usize(), j);
                     }
                 });
             }

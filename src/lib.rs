@@ -715,45 +715,55 @@ mod test {
     #[cfg(feature = "sync")]
     #[test]
     fn test_intern_lookup() {
-        let arena: Arena<u32> = Arena::default();
+        let arena: Arena<usize> = Arena::default();
         for i in 0..100 {
-            assert_eq!(arena.intern(2 * i).id, i);
+            assert_eq!(arena.intern(2 * i).id.to_usize(), i);
         }
         for i in 0..100 {
-            assert_eq!(*arena.lookup_ref(Interned::new(i)), 2 * i);
-            assert_eq!(arena.lookup(Interned::new(i)), 2 * i);
+            assert_eq!(
+                *arena.lookup_ref(Interned::new(Index::from_usize(i))),
+                2 * i
+            );
+            assert_eq!(arena.lookup(Interned::new(Index::from_usize(i))), 2 * i);
         }
     }
 
     #[test]
     fn test_intern_mut_lookup() {
-        let mut arena: Arena<u32> = Arena::default();
+        let mut arena: Arena<usize> = Arena::default();
         for i in 0..100 {
-            assert_eq!(arena.intern_mut(2 * i).id, i);
+            assert_eq!(arena.intern_mut(2 * i).id.to_usize(), i);
         }
         for i in 0..100 {
-            assert_eq!(*arena.lookup_ref(Interned::new(i)), 2 * i);
-            assert_eq!(arena.lookup(Interned::new(i)), 2 * i);
+            assert_eq!(
+                *arena.lookup_ref(Interned::new(Index::from_usize(i))),
+                2 * i
+            );
+            assert_eq!(arena.lookup(Interned::new(Index::from_usize(i))), 2 * i);
         }
     }
 
     #[cfg(all(feature = "raw", not(miri)))]
-    const NUM_ITERS: u32 = 100;
+    const NUM_ITERS: usize = 100;
     #[cfg(all(feature = "raw", miri))]
-    const NUM_ITERS: u32 = 20;
+    const NUM_ITERS: usize = 20;
     #[cfg(all(feature = "raw", not(miri)))]
-    const NUM_VALUES: u32 = 50;
+    const NUM_VALUES: usize = 50;
     #[cfg(all(feature = "raw", miri))]
-    const NUM_VALUES: u32 = 10;
+    const NUM_VALUES: usize = 10;
 
     #[cfg(feature = "raw")]
     #[test]
     fn test_push_mut_same_value_works() {
-        let mut arena: Arena<Box<u32>> = Arena::default();
+        let mut arena: Arena<Box<usize>> = Arena::default();
         for i in 0..NUM_ITERS {
             for j in 0..NUM_VALUES {
-                assert_eq!(arena.push_mut(Box::new(42 + j)), i * NUM_VALUES + j);
+                assert_eq!(
+                    arena.push_mut(Box::new(42 + j)).to_usize(),
+                    i * NUM_VALUES + j
+                );
                 let id = arena.intern_mut(Box::new(42 + j)).id;
+                let id = id.to_usize();
                 assert_eq!(id % NUM_VALUES, j);
                 assert!(id / NUM_VALUES <= i);
             }
@@ -761,10 +771,13 @@ mod test {
         for i in 0..NUM_ITERS {
             for j in 0..NUM_VALUES {
                 assert_eq!(
-                    **arena.lookup_ref(Interned::new(i * NUM_VALUES + j)),
+                    **arena.lookup_ref(Interned::new(Index::from_usize(i * NUM_VALUES + j))),
                     42 + j
                 );
-                assert_eq!(*arena.lookup(Interned::new(i * NUM_VALUES + j)), 42 + j);
+                assert_eq!(
+                    *arena.lookup(Interned::new(Index::from_usize(i * NUM_VALUES + j))),
+                    42 + j
+                );
             }
         }
     }
@@ -781,15 +794,18 @@ mod test {
     #[cfg(feature = "sync")]
     #[test]
     fn test_intern_lookup_concurrent_reads() {
-        let arena: Arena<u32, Box<u32>> = Arena::default();
+        let arena: Arena<usize, Box<usize>> = Arena::default();
         thread::scope(|s| {
             for _ in 0..NUM_READERS {
                 s.spawn(|| {
                     loop {
                         let len = arena.len();
                         if len > 0 {
-                            let last = len as u32 - 1;
-                            assert_eq!(*arena.lookup_ref(Interned::new(last)), last);
+                            let last = len - 1;
+                            assert_eq!(
+                                *arena.lookup_ref(Interned::new(Index::from_usize(last))),
+                                last
+                            );
                             if len == NUM_ITEMS {
                                 break;
                             }
@@ -798,8 +814,8 @@ mod test {
                 });
             }
             s.spawn(|| {
-                for j in 0..NUM_ITEMS as u32 {
-                    assert_eq!(arena.intern(j).id, j);
+                for j in 0..NUM_ITEMS {
+                    assert_eq!(arena.intern(j).id.to_usize(), j);
                 }
             });
         });
@@ -808,14 +824,17 @@ mod test {
     #[cfg(feature = "sync")]
     #[test]
     fn test_intern_lookup_concurrent_writes() {
-        let arena: Arena<u32, Box<u32>> = Arena::default();
+        let arena: Arena<usize, Box<usize>> = Arena::default();
         thread::scope(|s| {
             s.spawn(|| {
                 loop {
                     let len = arena.len();
                     if len > 0 {
-                        let last = len as u32 - 1;
-                        assert_eq!(*arena.lookup_ref(Interned::new(last)), last);
+                        let last = len - 1;
+                        assert_eq!(
+                            *arena.lookup_ref(Interned::new(Index::from_usize(last))),
+                            last
+                        );
                         if len == NUM_ITEMS {
                             break;
                         }
@@ -824,8 +843,8 @@ mod test {
             });
             for _ in 0..NUM_WRITERS {
                 s.spawn(|| {
-                    for j in 0..NUM_ITEMS as u32 {
-                        assert_eq!(arena.intern(j).id, j);
+                    for j in 0..NUM_ITEMS {
+                        assert_eq!(arena.intern(j).id.to_usize(), j);
                     }
                 });
             }
@@ -835,15 +854,18 @@ mod test {
     #[cfg(feature = "sync")]
     #[test]
     fn test_intern_lookup_concurrent_readwrites() {
-        let arena: Arena<u32, Box<u32>> = Arena::default();
+        let arena: Arena<usize, Box<usize>> = Arena::default();
         thread::scope(|s| {
             for _ in 0..NUM_READERS {
                 s.spawn(|| {
                     loop {
                         let len = arena.len();
                         if len > 0 {
-                            let last = len as u32 - 1;
-                            assert_eq!(*arena.lookup_ref(Interned::new(last)), last);
+                            let last = len - 1;
+                            assert_eq!(
+                                *arena.lookup_ref(Interned::new(Index::from_usize(last))),
+                                last
+                            );
                             if len == NUM_ITEMS {
                                 break;
                             }
@@ -853,8 +875,8 @@ mod test {
             }
             for _ in 0..NUM_WRITERS {
                 s.spawn(|| {
-                    for j in 0..NUM_ITEMS as u32 {
-                        assert_eq!(arena.intern(j).id, j);
+                    for j in 0..NUM_ITEMS {
+                        assert_eq!(arena.intern(j).id.to_usize(), j);
                     }
                 });
             }
@@ -867,19 +889,19 @@ mod test {
         let arena: Arena<str, Box<str>> = Arena::default();
 
         let key: &str = "Hello";
-        assert_eq!(arena.intern(key).id, 0);
+        assert_eq!(arena.intern(key).id.to_usize(), 0);
 
         let key: String = "world".into();
-        assert_eq!(arena.intern(key).id, 1);
+        assert_eq!(arena.intern(key).id.to_usize(), 1);
 
         let key: Box<str> = "Hello".into();
-        assert_eq!(arena.intern(key).id, 0);
+        assert_eq!(arena.intern(key).id.to_usize(), 0);
 
         let key: Box<str> = "world".into();
-        assert_eq!(arena.intern(key).id, 1);
+        assert_eq!(arena.intern(key).id.to_usize(), 1);
 
         let key: Cow<'_, str> = "Hello world".into();
-        assert_eq!(arena.intern(key).id, 2);
+        assert_eq!(arena.intern(key).id.to_usize(), 2);
     }
 
     #[test]
@@ -887,19 +909,19 @@ mod test {
         let mut arena: Arena<str, Box<str>> = Arena::default();
 
         let key: &str = "Hello";
-        assert_eq!(arena.intern_mut(key).id, 0);
+        assert_eq!(arena.intern_mut(key).id.to_usize(), 0);
 
         let key: String = "world".into();
-        assert_eq!(arena.intern_mut(key).id, 1);
+        assert_eq!(arena.intern_mut(key).id.to_usize(), 1);
 
         let key: Box<str> = "Hello".into();
-        assert_eq!(arena.intern_mut(key).id, 0);
+        assert_eq!(arena.intern_mut(key).id.to_usize(), 0);
 
         let key: Box<str> = "world".into();
-        assert_eq!(arena.intern_mut(key).id, 1);
+        assert_eq!(arena.intern_mut(key).id.to_usize(), 1);
 
         let key: Cow<'_, str> = "Hello world".into();
-        assert_eq!(arena.intern_mut(key).id, 2);
+        assert_eq!(arena.intern_mut(key).id.to_usize(), 2);
     }
 
     #[cfg(feature = "serde")]
