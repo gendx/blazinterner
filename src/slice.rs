@@ -1,3 +1,4 @@
+use crate::Index;
 use alloc::vec::Vec;
 #[cfg(feature = "sync")]
 use appendvec::AppendVec;
@@ -24,182 +25,217 @@ use serde::de::{Error, SeqAccess, Visitor};
 use serde::ser::{SerializeSeq, SerializeTuple};
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-#[cfg(feature = "serde")]
-use serde_tuple::{Deserialize_tuple, Serialize_tuple};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[cfg_attr(feature = "get-size2", derive(GetSize))]
-#[cfg_attr(feature = "serde", derive(Serialize_tuple, Deserialize_tuple))]
-pub struct CopyRangeU32 {
-    pub start: u32,
-    pub end: u32,
+pub struct CopyRange<I> {
+    pub start: I,
+    pub end: I,
 }
 
-impl From<Range<u32>> for CopyRangeU32 {
-    fn from(other: Range<u32>) -> Self {
-        CopyRangeU32 {
+impl<I> From<Range<I>> for CopyRange<I> {
+    fn from(other: Range<I>) -> Self {
+        Self {
             start: other.start,
             end: other.end,
         }
     }
 }
 
-impl From<CopyRangeU32> for Range<u32> {
-    fn from(other: CopyRangeU32) -> Self {
+impl<I> From<CopyRange<I>> for Range<I> {
+    fn from(other: CopyRange<I>) -> Self {
         other.start..other.end
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<I> Serialize for CopyRange<I>
+where
+    I: Serialize + Copy,
+{
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        (self.start, self.end).serialize(serializer)
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de, I> Deserialize<'de> for CopyRange<I>
+where
+    I: Deserialize<'de>,
+{
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let (start, end) = <(I, I)>::deserialize(deserializer)?;
+        Ok(Self { start, end })
     }
 }
 
 /// A handle to an interned value in an [`ArenaSlice`].
 #[cfg_attr(feature = "get-size2", derive(GetSize))]
-pub struct InternedSlice<T, H = DefaultHashBuilder> {
-    id: u32,
+pub struct InternedSlice<T, H = DefaultHashBuilder, I = u32> {
+    id: I,
     _phantom: PhantomData<fn() -> (*const T, H)>,
 }
 
-impl<T, H> Default for InternedSlice<T, H> {
+impl<T, H, I: Index> Default for InternedSlice<T, H, I> {
     fn default() -> Self {
-        Self::new(u32::MAX)
+        Self::new(I::MAX)
     }
 }
 
-impl<T, H> Debug for InternedSlice<T, H> {
+impl<T, H, I: Index> Debug for InternedSlice<T, H, I> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_tuple("I").field(&self.id).finish()
     }
 }
 
-impl<T, H> Clone for InternedSlice<T, H> {
+impl<T, H, I: Index> Clone for InternedSlice<T, H, I> {
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<T, H> Copy for InternedSlice<T, H> {}
+impl<T, H, I: Index> Copy for InternedSlice<T, H, I> {}
 
-impl<T, H> PartialEq for InternedSlice<T, H> {
+impl<T, H, I: Index> PartialEq for InternedSlice<T, H, I> {
     fn eq(&self, other: &Self) -> bool {
         self.id.eq(&other.id)
     }
 }
 
-impl<T, H> Eq for InternedSlice<T, H> {}
+impl<T, H, I: Index> Eq for InternedSlice<T, H, I> {}
 
-impl<T, H> PartialOrd for InternedSlice<T, H> {
+impl<T, H, I: Index> PartialOrd for InternedSlice<T, H, I> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl<T, H> Ord for InternedSlice<T, H> {
+impl<T, H, I: Index> Ord for InternedSlice<T, H, I> {
     fn cmp(&self, other: &Self) -> Ordering {
         self.id.cmp(&other.id)
     }
 }
 
-impl<T, H> Hash for InternedSlice<T, H> {
-    fn hash<I>(&self, state: &mut I)
+impl<T, H, I: Index> Hash for InternedSlice<T, H, I> {
+    fn hash<G>(&self, state: &mut G)
     where
-        I: Hasher,
+        G: Hasher,
     {
         self.id.hash(state);
     }
 }
 
 #[cfg(feature = "raw")]
-impl<T, H> InternedSlice<T, H> {
+impl<T, H, I> InternedSlice<T, H, I> {
     /// Creates an interned value for the given index.
     ///
     /// This is a low-level function. You should instead use the
     /// [`ArenaSlice::intern()`] API to intern a value, unless you really know
     /// what you're doing.
-    pub fn from_id(id: u32) -> Self {
+    pub fn from_id(id: I) -> Self {
         Self::new(id)
     }
+}
 
+#[cfg(feature = "raw")]
+impl<T, H, I: Index> InternedSlice<T, H, I> {
     /// Obtains the underlying interning index.
     ///
     /// This is a low-level function. You should instead use the
     /// [`ArenaSlice::lookup()`] API, unless you really know what you're doing.
-    pub fn id(&self) -> u32 {
+    pub fn id(&self) -> I {
         self.id
     }
 }
 
-impl<T, H> InternedSlice<T, H> {
-    pub(crate) fn new(id: u32) -> Self {
+impl<T, H, I> InternedSlice<T, H, I> {
+    pub(crate) fn new(id: I) -> Self {
         Self {
             id,
             _phantom: PhantomData,
         }
     }
+}
 
-    pub(crate) fn id_(&self) -> u32 {
+impl<T, H, I: Index> InternedSlice<T, H, I> {
+    pub(crate) fn id_(&self) -> I {
         self.id
     }
 }
 
 #[cfg(feature = "serde")]
-impl<T, H> Serialize for InternedSlice<T, H> {
+impl<T, H, I> Serialize for InternedSlice<T, H, I>
+where
+    I: Serialize,
+{
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
-        serializer.serialize_u32(self.id)
+        self.id.serialize(serializer)
     }
 }
 
 #[cfg(feature = "serde")]
-impl<'de, T, H> Deserialize<'de> for InternedSlice<T, H> {
+impl<'de, T, H, I> Deserialize<'de> for InternedSlice<T, H, I>
+where
+    I: Deserialize<'de>,
+{
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
-        let id = u32::deserialize(deserializer)?;
+        let id = I::deserialize(deserializer)?;
         Ok(Self::new(id))
     }
 }
 
 #[cfg_attr(feature = "get-size2", derive(GetSize))]
-struct RangeVec<T> {
+struct RangeVec<T, I> {
     #[cfg(not(feature = "sync"))]
     vec: Vec<T>,
     #[cfg(feature = "sync")]
     vec: AppendVec<T>,
     #[cfg(not(feature = "sync"))]
-    ranges: Vec<CopyRangeU32>,
+    ranges: Vec<CopyRange<I>>,
     #[cfg(feature = "sync")]
-    ranges: AppendVec<CopyRangeU32>,
+    ranges: AppendVec<CopyRange<I>>,
 }
 
-impl<T> RangeVec<T> {
-    fn lookup_slice(&self, id: u32) -> &[T] {
-        let range = self.ranges[id as usize];
-        let range = range.start as usize..range.end as usize;
+impl<T, I: Index> RangeVec<T, I> {
+    fn lookup_slice(&self, id: I) -> &[T] {
+        let range = self.ranges[id.to_usize()];
+        let range = range.start.to_usize()..range.end.to_usize();
         &self.vec[range]
     }
 
     fn iter(&self) -> impl ExactSizeIterator<Item = &[T]> {
         self.ranges
             .iter()
-            .map(|&range| &self.vec[range.start as usize..range.end as usize])
+            .map(|&range| &self.vec[range.start.to_usize()..range.end.to_usize()])
     }
 
     #[cfg(feature = "sync")]
-    fn push_range(&self, range: Range<usize>) -> u32 {
-        assert!(range.start <= u32::MAX as usize);
-        assert!(range.end <= u32::MAX as usize);
-        let range = range.start as u32..range.end as u32;
+    fn push_range(&self, range: Range<usize>) -> I {
+        assert!(range.start <= I::MAX.to_usize());
+        assert!(range.end <= I::MAX.to_usize());
+        let range = I::from_usize(range.start)..I::from_usize(range.end);
 
         let id = self.ranges.push(range.into());
-        assert!(id <= u32::MAX as usize);
-        id as u32
+        assert!(id <= I::MAX.to_usize());
+        I::from_usize(id)
     }
 
-    fn push_range_mut(&mut self, range: Range<usize>) -> u32 {
-        assert!(range.start <= u32::MAX as usize);
-        assert!(range.end <= u32::MAX as usize);
-        let range = range.start as u32..range.end as u32;
+    fn push_range_mut(&mut self, range: Range<usize>) -> I {
+        assert!(range.start <= I::MAX.to_usize());
+        assert!(range.end <= I::MAX.to_usize());
+        let range = I::from_usize(range.start)..I::from_usize(range.end);
 
         #[cfg(not(feature = "sync"))]
         let id = {
@@ -209,27 +245,28 @@ impl<T> RangeVec<T> {
         };
         #[cfg(feature = "sync")]
         let id = self.ranges.push_mut(range.into());
-        assert!(id <= u32::MAX as usize);
-        id as u32
+        assert!(id <= I::MAX.to_usize());
+        I::from_usize(id)
     }
 }
 
 /// Interning arena for slices of type `T`.
-pub struct ArenaSlice<T, H = DefaultHashBuilder> {
-    rangevec: RangeVec<T>,
+pub struct ArenaSlice<T, H = DefaultHashBuilder, I = u32> {
+    rangevec: RangeVec<T, I>,
     #[cfg(not(feature = "sync"))]
-    map: HashTable<u32>,
+    map: HashTable<I>,
     #[cfg(feature = "sync")]
-    map: DashTable<u32>,
+    map: DashTable<I>,
     hasher: H,
     #[cfg(feature = "debug")]
     references: AtomicUsize,
 }
 
-impl<T, H> Clone for ArenaSlice<T, H>
+impl<T, H, I> Clone for ArenaSlice<T, H, I>
 where
     T: Default + Clone + Eq + Hash,
     H: Default + BuildHasher,
+    I: Index,
 {
     fn clone(&self) -> Self {
         let iter = self.iter_();
@@ -241,7 +278,7 @@ where
     }
 }
 
-impl<T, H> ArenaSlice<T, H>
+impl<T, H, I> ArenaSlice<T, H, I>
 where
     H: Default,
 {
@@ -270,7 +307,7 @@ where
     }
 }
 
-impl<T, H> ArenaSlice<T, H> {
+impl<T, H, I> ArenaSlice<T, H, I> {
     /// Returns the number of slices in this arena.
     ///
     /// Note that because [`ArenaSlice`] is a concurrent data structure, this is
@@ -297,7 +334,9 @@ impl<T, H> ArenaSlice<T, H> {
     pub fn is_empty(&self) -> bool {
         self.slices() == 0
     }
+}
 
+impl<T, H, I: Index> ArenaSlice<T, H, I> {
     /// Returns an iterator over all slices in this arena, in indexing order.
     ///
     /// Note that because [`ArenaSlice`] is a concurrent data structure, this is
@@ -314,10 +353,11 @@ impl<T, H> ArenaSlice<T, H> {
     }
 }
 
-impl<T, H> ArenaSlice<T, H>
+impl<T, H, I> ArenaSlice<T, H, I>
 where
     T: Eq + Hash,
     H: BuildHasher,
+    I: Index,
 {
     /// Returns the given value's [`InternedSlice`] handle if it is already
     /// interned.
@@ -327,7 +367,7 @@ where
     ///
     /// See also [`find_mut()`](Self::find_mut), which is more efficient if you
     /// hold a mutable reference to this arena as it avoids acquiring locks.
-    pub fn find(&self, value: &[T]) -> Option<InternedSlice<T, H>> {
+    pub fn find(&self, value: &[T]) -> Option<InternedSlice<T, H, I>> {
         let hash = self.hash_slice(value);
         self.map
             .find(hash, |&i| self.lookup_slice(i) == value)
@@ -343,7 +383,7 @@ where
     /// Contrary to [`find()`](Self::find), no locks are held internally because
     /// this function already takes an exclusive mutable reference to this
     /// arena.
-    pub fn find_mut(&mut self, value: &[T]) -> Option<InternedSlice<T, H>> {
+    pub fn find_mut(&mut self, value: &[T]) -> Option<InternedSlice<T, H, I>> {
         let hash = self.hash_slice(value);
         #[cfg(not(feature = "sync"))]
         return self
@@ -358,7 +398,7 @@ where
     }
 }
 
-impl<T, H> ArenaSlice<T, H>
+impl<T, H, I> ArenaSlice<T, H, I>
 where
     T: Hash,
     H: BuildHasher,
@@ -376,7 +416,7 @@ where
     }
 }
 
-impl<T, H> Default for ArenaSlice<T, H>
+impl<T, H, I> Default for ArenaSlice<T, H, I>
 where
     H: Default,
 {
@@ -403,7 +443,7 @@ where
     }
 }
 
-impl<T, H> Debug for ArenaSlice<T, H>
+impl<T, H, I: Index> Debug for ArenaSlice<T, H, I>
 where
     T: Debug,
 {
@@ -412,21 +452,23 @@ where
     }
 }
 
-impl<T, H> PartialEq for ArenaSlice<T, H>
+impl<T, H, I> PartialEq for ArenaSlice<T, H, I>
 where
     T: Eq,
+    I: Index,
 {
     fn eq(&self, other: &Self) -> bool {
         self.iter_().eq(other.iter_())
     }
 }
 
-impl<T, H> Eq for ArenaSlice<T, H> where T: Eq {}
+impl<T, H, I: Index> Eq for ArenaSlice<T, H, I> where T: Eq {}
 
 #[cfg(feature = "get-size2")]
-impl<T, H> GetSize for ArenaSlice<T, H>
+impl<T, H, I> GetSize for ArenaSlice<T, H, I>
 where
     T: GetSize,
+    I: GetSize,
 {
     fn get_heap_size_with_tracker<Tr: GetSizeTracker>(&self, tracker: Tr) -> (usize, Tr) {
         let (size_vec, tracker) = GetSize::get_heap_size_with_tracker(&self.rangevec, tracker);
@@ -436,7 +478,7 @@ where
 }
 
 #[cfg(all(feature = "debug", feature = "std"))]
-impl<T, H> ArenaSlice<T, H>
+impl<T, H, I> ArenaSlice<T, H, I>
 where
     T: GetSize,
 {
@@ -463,7 +505,7 @@ where
 }
 
 #[cfg(feature = "debug")]
-impl<T, H> ArenaSlice<T, H> {
+impl<T, H, I> ArenaSlice<T, H, I> {
     /// Returns the total number of references to slices in this arena.
     ///
     /// The underlying counter is incremented each time a slice is interned,
@@ -473,7 +515,7 @@ impl<T, H> ArenaSlice<T, H> {
     }
 }
 
-impl<T, H> ArenaSlice<T, H>
+impl<T, H, I> ArenaSlice<T, H, I>
 where
     T: Eq,
 {
@@ -502,10 +544,11 @@ where
     }
 }
 
-impl<T, H> ArenaSlice<T, H>
+impl<T, H, I> ArenaSlice<T, H, I>
 where
     T: Default + Eq + Hash,
     H: BuildHasher,
+    I: Index,
 {
     /// Interns the given value in this arena.
     ///
@@ -516,7 +559,7 @@ where
     /// efficient if you hold a mutable reference to this arena as it avoids
     /// acquiring locks.
     #[cfg(feature = "sync")]
-    pub fn intern_owned(&self, value: Vec<T>) -> InternedSlice<T, H> {
+    pub fn intern_owned(&self, value: Vec<T>) -> InternedSlice<T, H, I> {
         #[cfg(feature = "debug")]
         self.references.fetch_add(1, atomic::Ordering::Relaxed);
 
@@ -544,7 +587,7 @@ where
     /// Contrary to [`intern_owned()`](Self::intern_owned), no locks are held
     /// internally because this function already takes an exclusive mutable
     /// reference to this arena.
-    pub fn intern_owned_mut(&mut self, value: Vec<T>) -> InternedSlice<T, H> {
+    pub fn intern_owned_mut(&mut self, value: Vec<T>) -> InternedSlice<T, H, I> {
         #[cfg(feature = "debug")]
         {
             *self.references.get_mut() += 1;
@@ -591,7 +634,7 @@ where
     /// efficient if you hold a mutable reference to this arena as it avoids
     /// acquiring locks.
     #[cfg(feature = "sync")]
-    pub fn intern_array<const N: usize>(&self, value: [T; N]) -> InternedSlice<T, H> {
+    pub fn intern_array<const N: usize>(&self, value: [T; N]) -> InternedSlice<T, H, I> {
         #[cfg(feature = "debug")]
         self.references.fetch_add(1, atomic::Ordering::Relaxed);
 
@@ -619,7 +662,7 @@ where
     /// Contrary to [`intern_array()`](Self::intern_array), no locks are held
     /// internally because this function already takes an exclusive mutable
     /// reference to this arena.
-    pub fn intern_array_mut<const N: usize>(&mut self, value: [T; N]) -> InternedSlice<T, H> {
+    pub fn intern_array_mut<const N: usize>(&mut self, value: [T; N]) -> InternedSlice<T, H, I> {
         #[cfg(feature = "debug")]
         {
             *self.references.get_mut() += 1;
@@ -673,7 +716,7 @@ where
     pub unsafe fn intern_iter(
         &self,
         value: impl ExactSizeIterator<Item = T> + Clone,
-    ) -> InternedSlice<T, H> {
+    ) -> InternedSlice<T, H, I> {
         #[cfg(feature = "debug")]
         self.references.fetch_add(1, atomic::Ordering::Relaxed);
 
@@ -716,7 +759,7 @@ where
     pub unsafe fn intern_iter_mut(
         &mut self,
         value: impl ExactSizeIterator<Item = T> + Clone,
-    ) -> InternedSlice<T, H> {
+    ) -> InternedSlice<T, H, I> {
         #[cfg(feature = "debug")]
         {
             *self.references.get_mut() += 1;
@@ -768,7 +811,7 @@ where
     /// Calling this function multiple times with the same value doesn't violate
     /// safety, but the value will be stored multiple times in the arena.
     #[cfg(feature = "raw")]
-    pub fn push_owned_mut(&mut self, value: Vec<T>) -> InternedSlice<T, H> {
+    pub fn push_owned_mut(&mut self, value: Vec<T>) -> InternedSlice<T, H, I> {
         #[cfg(feature = "debug")]
         {
             *self.references.get_mut() += 1;
@@ -806,7 +849,7 @@ where
     /// Calling this function multiple times with the same value doesn't violate
     /// safety, but the value will be stored multiple times in the arena.
     #[cfg(feature = "raw")]
-    pub fn push_array_mut<const N: usize>(&mut self, value: [T; N]) -> InternedSlice<T, H> {
+    pub fn push_array_mut<const N: usize>(&mut self, value: [T; N]) -> InternedSlice<T, H, I> {
         #[cfg(feature = "debug")]
         {
             *self.references.get_mut() += 1;
@@ -850,7 +893,7 @@ where
     pub unsafe fn push_iter_mut(
         &mut self,
         value: impl ExactSizeIterator<Item = T>,
-    ) -> InternedSlice<T, H> {
+    ) -> InternedSlice<T, H, I> {
         // SAFETY: Simply forwarding to the crate-internal version.
         unsafe { self.push_iter_mut_(value) }
     }
@@ -868,7 +911,7 @@ where
     pub(crate) unsafe fn push_iter_mut_(
         &mut self,
         value: impl ExactSizeIterator<Item = T>,
-    ) -> InternedSlice<T, H> {
+    ) -> InternedSlice<T, H, I> {
         #[cfg(feature = "debug")]
         {
             *self.references.get_mut() += 1;
@@ -900,10 +943,11 @@ where
     }
 }
 
-impl<T, H> ArenaSlice<T, H>
+impl<T, H, I> ArenaSlice<T, H, I>
 where
     T: Default + Clone + Eq + Hash,
     H: BuildHasher,
+    I: Index,
 {
     /// Interns the given value in this arena.
     ///
@@ -916,7 +960,7 @@ where
     /// See also [`intern_mut()`](Self::intern_mut), which is more efficient if
     /// you hold a mutable reference to this arena as it avoids acquiring locks.
     #[cfg(feature = "sync")]
-    pub fn intern(&self, value: &[T]) -> InternedSlice<T, H> {
+    pub fn intern(&self, value: &[T]) -> InternedSlice<T, H, I> {
         #[cfg(feature = "debug")]
         self.references.fetch_add(1, atomic::Ordering::Relaxed);
 
@@ -947,7 +991,7 @@ where
     /// Contrary to [`intern()`](Self::intern), no locks are held internally
     /// because this function already takes an exclusive mutable reference to
     /// this arena.
-    pub fn intern_mut(&mut self, value: &[T]) -> InternedSlice<T, H> {
+    pub fn intern_mut(&mut self, value: &[T]) -> InternedSlice<T, H, I> {
         #[cfg(feature = "debug")]
         {
             *self.references.get_mut() += 1;
@@ -992,7 +1036,7 @@ where
     /// If `T` is [`Copy`], calling [`push_copy_mut()`](Self::push_copy_mut) may
     /// be more efficient.
     #[cfg(feature = "raw")]
-    pub fn push_mut(&mut self, value: &[T]) -> u32 {
+    pub fn push_mut(&mut self, value: &[T]) -> I {
         self.push(value)
     }
 
@@ -1001,7 +1045,7 @@ where
     ///
     /// Calling this function multiple times with the same value doesn't violate
     /// safety, but the value will be stored multiple times in the arena.
-    pub(crate) fn push(&mut self, value: &[T]) -> u32 {
+    pub(crate) fn push(&mut self, value: &[T]) -> I {
         #[cfg(feature = "debug")]
         {
             *self.references.get_mut() += 1;
@@ -1032,10 +1076,11 @@ where
     }
 }
 
-impl<T, H> ArenaSlice<T, H>
+impl<T, H, I> ArenaSlice<T, H, I>
 where
     T: Default + Copy + Eq + Hash,
     H: BuildHasher,
+    I: Index,
 {
     /// Interns the given value in this arena.
     ///
@@ -1051,7 +1096,7 @@ where
     /// efficient if you hold a mutable reference to this arena as it avoids
     /// acquiring locks.
     #[cfg(feature = "sync")]
-    pub fn intern_copy(&self, value: &[T]) -> InternedSlice<T, H> {
+    pub fn intern_copy(&self, value: &[T]) -> InternedSlice<T, H, I> {
         #[cfg(feature = "debug")]
         self.references.fetch_add(1, atomic::Ordering::Relaxed);
 
@@ -1084,7 +1129,7 @@ where
     /// Contrary to [`intern_copy()`](Self::intern_copy), no locks are held
     /// internally because this function already takes an exclusive mutable
     /// reference to this arena.
-    pub fn intern_copy_mut(&mut self, value: &[T]) -> InternedSlice<T, H> {
+    pub fn intern_copy_mut(&mut self, value: &[T]) -> InternedSlice<T, H, I> {
         #[cfg(feature = "debug")]
         {
             *self.references.get_mut() += 1;
@@ -1123,7 +1168,7 @@ where
     /// If `T` is only [`Clone`], you can call [`push_mut()`](Self::push_mut)
     /// instead.
     #[cfg(feature = "raw")]
-    pub fn push_copy_mut(&mut self, value: &[T]) -> u32 {
+    pub fn push_copy_mut(&mut self, value: &[T]) -> I {
         #[cfg(feature = "debug")]
         {
             *self.references.get_mut() += 1;
@@ -1154,25 +1199,26 @@ where
     }
 }
 
-impl<T, H> ArenaSlice<T, H> {
+impl<T, H, I: Index> ArenaSlice<T, H, I> {
     /// Retrieves the given [`InternedSlice`] value from this arena.
     ///
     /// The caller is responsible for ensuring that the same arena was used to
     /// intern this value, otherwise an arbitrary value will be returned or
     /// a panic will happen.
-    pub fn lookup(&self, interned: InternedSlice<T, H>) -> &[T] {
+    pub fn lookup(&self, interned: InternedSlice<T, H, I>) -> &[T] {
         self.lookup_slice(interned.id)
     }
 
-    fn lookup_slice(&self, id: u32) -> &[T] {
+    fn lookup_slice(&self, id: I) -> &[T] {
         self.rangevec.lookup_slice(id)
     }
 }
 
 #[cfg(feature = "serde")]
-impl<T, H> Serialize for ArenaSlice<T, H>
+impl<T, H, I> Serialize for ArenaSlice<T, H, I>
 where
     T: Serialize,
+    I: Index + Serialize,
 {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -1182,8 +1228,8 @@ where
 
         let ranges = RangeWrapper {
             ranges: &self.rangevec.ranges,
-            ranges_len: Cell::new(0),
-            total_len: Cell::new(0),
+            ranges_len: Cell::new(I::ZERO),
+            total_len: Cell::new(I::ZERO),
         };
         tuple.serialize_element(&ranges)?;
 
@@ -1198,25 +1244,28 @@ where
 }
 
 #[cfg(feature = "serde")]
-struct RangeWrapper<'a> {
+struct RangeWrapper<'a, I> {
     #[cfg(not(feature = "sync"))]
-    ranges: &'a [CopyRangeU32],
+    ranges: &'a [CopyRange<I>],
     #[cfg(feature = "sync")]
-    ranges: &'a AppendVec<CopyRangeU32>,
-    ranges_len: Cell<u32>,
-    total_len: Cell<u32>,
+    ranges: &'a AppendVec<CopyRange<I>>,
+    ranges_len: Cell<I>,
+    total_len: Cell<I>,
 }
 
 #[cfg(feature = "serde")]
-impl<'a> Serialize for RangeWrapper<'a> {
+impl<'a, I> Serialize for RangeWrapper<'a, I>
+where
+    I: Index + Serialize,
+{
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
-        let mut ranges_len: u32 = 0;
-        let mut total_len: u32 = 0;
+        let mut ranges_len = I::ZERO;
+        let mut total_len = I::ZERO;
         let result = serializer.collect_seq(self.ranges.iter().map(|range| {
-            ranges_len += 1;
+            ranges_len.incr();
             let this_len = range.end - range.start;
             total_len = total_len.strict_add(this_len);
             this_len
@@ -1230,25 +1279,26 @@ impl<'a> Serialize for RangeWrapper<'a> {
 }
 
 #[cfg(feature = "serde")]
-struct ArenaSliceWrapper<'a, T> {
-    ranges_len: u32,
-    total_len: u32,
-    rangevec: &'a RangeVec<T>,
+struct ArenaSliceWrapper<'a, T, I> {
+    ranges_len: I,
+    total_len: I,
+    rangevec: &'a RangeVec<T, I>,
 }
 
 #[cfg(feature = "serde")]
-impl<'a, T> Serialize for ArenaSliceWrapper<'a, T>
+impl<'a, T, I> Serialize for ArenaSliceWrapper<'a, T, I>
 where
     T: Serialize,
+    I: Index,
 {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
-        let mut seq = serializer.serialize_seq(Some(self.total_len as usize))?;
+        let mut seq = serializer.serialize_seq(Some(self.total_len.to_usize()))?;
 
-        for range in self.rangevec.ranges.iter().take(self.ranges_len as usize) {
-            let slice = &self.rangevec.vec[range.start as usize..range.end as usize];
+        for range in self.rangevec.ranges.iter().take(self.ranges_len.to_usize()) {
+            let slice = &self.rangevec.vec[range.start.to_usize()..range.end.to_usize()];
             for t in slice {
                 seq.serialize_element(t)?;
             }
@@ -1259,10 +1309,11 @@ where
 }
 
 #[cfg(feature = "serde")]
-impl<'de, T, H> Deserialize<'de> for ArenaSlice<T, H>
+impl<'de, T, H, I> Deserialize<'de> for ArenaSlice<T, H, I>
 where
     T: Default + Clone + Eq + Hash + Deserialize<'de>,
     H: Default + BuildHasher,
+    I: Index + Deserialize<'de>,
 {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -1273,12 +1324,13 @@ where
 }
 
 #[cfg(feature = "serde")]
-struct ArenaSliceVisitor<T, H> {
-    _phantom: PhantomData<fn() -> ArenaSlice<T, H>>,
+struct ArenaSliceVisitor<T, H, I> {
+    #[expect(clippy::type_complexity)]
+    _phantom: PhantomData<fn() -> ArenaSlice<T, H, I>>,
 }
 
 #[cfg(feature = "serde")]
-impl<T, H> ArenaSliceVisitor<T, H> {
+impl<T, H, I> ArenaSliceVisitor<T, H, I> {
     fn new() -> Self {
         Self {
             _phantom: PhantomData,
@@ -1287,12 +1339,13 @@ impl<T, H> ArenaSliceVisitor<T, H> {
 }
 
 #[cfg(feature = "serde")]
-impl<'de, T, H> Visitor<'de> for ArenaSliceVisitor<T, H>
+impl<'de, T, H, I> Visitor<'de> for ArenaSliceVisitor<T, H, I>
 where
     T: Default + Clone + Eq + Hash + Deserialize<'de>,
     H: Default + BuildHasher,
+    I: Index + Deserialize<'de>,
 {
-    type Value = ArenaSlice<T, H>;
+    type Value = ArenaSlice<T, H, I>;
 
     fn expecting(&self, formatter: &mut core::fmt::Formatter) -> core::fmt::Result {
         formatter.write_str("a pair of values")
@@ -1302,7 +1355,7 @@ where
     where
         A: SeqAccess<'de>,
     {
-        let sizes: Vec<u32> = seq
+        let sizes: Vec<I> = seq
             .next_element()?
             .ok_or_else(|| A::Error::invalid_length(0, &self))?;
         let values: Vec<T> = seq
@@ -1313,7 +1366,7 @@ where
 
         let mut start = 0;
         for size in sizes {
-            let size = size as usize;
+            let size = size.to_usize();
             arena.push(&values[start..start + size]);
             start += size;
         }
@@ -1328,8 +1381,9 @@ mod delta {
     use crate::{Accumulator, DeltaEncoding};
     use alloc::boxed::Box;
 
-    impl<T, H, Delta, Accum> Serialize for DeltaEncoding<&ArenaSlice<T, H>, Accum>
+    impl<T, H, I, Delta, Accum> Serialize for DeltaEncoding<&ArenaSlice<T, H, I>, Accum>
     where
+        I: Index + Serialize,
         Delta: Serialize,
         Accum: Accumulator<Value = [T], Storage = Box<[T]>, DeltaStorage = Box<[Delta]>>,
     {
@@ -1341,8 +1395,8 @@ mod delta {
 
             let ranges = RangeWrapper {
                 ranges: &self.rangevec.ranges,
-                ranges_len: Cell::new(0),
-                total_len: Cell::new(0),
+                ranges_len: Cell::new(I::ZERO),
+                total_len: Cell::new(I::ZERO),
             };
             tuple.serialize_element(&ranges)?;
 
@@ -1356,14 +1410,15 @@ mod delta {
         }
     }
 
-    struct ArenaSliceWrapper<'a, T, Accum> {
-        ranges_len: u32,
-        total_len: u32,
-        rangevec: &'a DeltaEncoding<&'a RangeVec<T>, Accum>,
+    struct ArenaSliceWrapper<'a, T, I, Accum> {
+        ranges_len: I,
+        total_len: I,
+        rangevec: &'a DeltaEncoding<&'a RangeVec<T, I>, Accum>,
     }
 
-    impl<'a, T, Delta, Accum> Serialize for ArenaSliceWrapper<'a, T, Accum>
+    impl<'a, T, I, Delta, Accum> Serialize for ArenaSliceWrapper<'a, T, I, Accum>
     where
+        I: Index,
         Delta: Serialize,
         Accum: Accumulator<Value = [T], Storage = Box<[T]>, DeltaStorage = Box<[Delta]>>,
     {
@@ -1371,11 +1426,11 @@ mod delta {
         where
             S: Serializer,
         {
-            let mut seq = serializer.serialize_seq(Some(self.total_len as usize))?;
+            let mut seq = serializer.serialize_seq(Some(self.total_len.to_usize()))?;
 
             let mut acc = Accum::default();
-            for range in self.rangevec.ranges.iter().take(self.ranges_len as usize) {
-                let slice = &self.rangevec.vec[range.start as usize..range.end as usize];
+            for range in self.rangevec.ranges.iter().take(self.ranges_len.to_usize()) {
+                let slice = &self.rangevec.vec[range.start.to_usize()..range.end.to_usize()];
                 let delta = acc.fold(slice);
                 assert_eq!(
                     delta.len(),
@@ -1391,10 +1446,11 @@ mod delta {
         }
     }
 
-    impl<'de, T, H, Delta, Accum> Deserialize<'de> for DeltaEncoding<ArenaSlice<T, H>, Accum>
+    impl<'de, T, H, I, Delta, Accum> Deserialize<'de> for DeltaEncoding<ArenaSlice<T, H, I>, Accum>
     where
         T: Default + Copy + Eq + Hash,
         H: Default + BuildHasher,
+        I: Index + Deserialize<'de>,
         Delta: Deserialize<'de>,
         Accum: Accumulator<Value = [T], Storage = Box<[T]>, Delta = [Delta]>,
     {
@@ -1406,12 +1462,13 @@ mod delta {
         }
     }
 
-    struct DeltaArenaSliceVisitor<T, H, Accum> {
-        _phantom: PhantomData<fn() -> ArenaSlice<T, H>>,
+    struct DeltaArenaSliceVisitor<T, H, I, Accum> {
+        #[expect(clippy::type_complexity)]
+        _phantom: PhantomData<fn() -> ArenaSlice<T, H, I>>,
         _accum: PhantomData<Accum>,
     }
 
-    impl<T, H, Accum> DeltaArenaSliceVisitor<T, H, Accum> {
+    impl<T, H, I, Accum> DeltaArenaSliceVisitor<T, H, I, Accum> {
         fn new() -> Self {
             Self {
                 _phantom: PhantomData,
@@ -1420,14 +1477,15 @@ mod delta {
         }
     }
 
-    impl<'de, T, H, Delta, Accum> Visitor<'de> for DeltaArenaSliceVisitor<T, H, Accum>
+    impl<'de, T, H, I, Delta, Accum> Visitor<'de> for DeltaArenaSliceVisitor<T, H, I, Accum>
     where
         T: Default + Copy + Eq + Hash,
         H: Default + BuildHasher,
+        I: Index + Deserialize<'de>,
         Delta: Deserialize<'de>,
         Accum: Accumulator<Value = [T], Storage = Box<[T]>, Delta = [Delta]>,
     {
-        type Value = DeltaEncoding<ArenaSlice<T, H>, Accum>;
+        type Value = DeltaEncoding<ArenaSlice<T, H, I>, Accum>;
 
         fn expecting(&self, formatter: &mut core::fmt::Formatter) -> core::fmt::Result {
             formatter.write_str("a pair of values")
@@ -1437,7 +1495,7 @@ mod delta {
         where
             A: SeqAccess<'de>,
         {
-            let sizes: Vec<u32> = seq
+            let sizes: Vec<I> = seq
                 .next_element()?
                 .ok_or_else(|| A::Error::invalid_length(0, &self))?;
             let values: Vec<Delta> = seq
@@ -1449,7 +1507,7 @@ mod delta {
             let mut acc = Accum::default();
             let mut start = 0;
             for size in sizes {
-                let size = size as usize;
+                let size = size.to_usize();
                 let delta = &values[start..start + size];
                 let slice = acc.unfold(delta);
                 assert_eq!(

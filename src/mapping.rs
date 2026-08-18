@@ -1,4 +1,4 @@
-use super::{Arena, ArenaSlice, ArenaStr, Interned, InternedSlice, InternedStr};
+use super::{Arena, ArenaSlice, ArenaStr, Index, Interned, InternedSlice, InternedStr};
 use alloc::boxed::Box;
 use alloc::vec;
 use alloc::vec::Vec;
@@ -13,32 +13,36 @@ use either::Either;
 #[cfg(feature = "retain")]
 use hashbrown::DefaultHashBuilder;
 
-impl<T: ?Sized, Storage, H> Arena<T, Storage, H>
+impl<T: ?Sized, Storage, H, I> Arena<T, Storage, H, I>
 where
     T: Ord,
     Storage: Borrow<T>,
+    I: Index,
 {
     /// Returns a sorted mapping of the items in this arena.
-    pub fn sort(&self) -> Mapping {
-        let mut mapping: Vec<u32> = (0..self.len() as u32).collect();
+    pub fn sort(&self) -> Mapping<I> {
+        let mut mapping: Vec<I> = (0..self.len()).map(I::from_usize).collect();
         mapping.sort_by_cached_key(|i| self.lookup_ref(Interned::new(*i)));
         let reverse = ReverseMapping::new(mapping.into_boxed_slice());
         let forward = reverse.reverse();
         Mapping { forward, reverse }
     }
+}
 
+impl<T: ?Sized, Storage, H, I> Arena<T, Storage, H, I>
+where
+    I: Index,
+{
     /// Returns the identity mapping of the items in this arena.
     ///
     /// This can be useful to rehash the arena.
-    pub fn identity(&self) -> Mapping {
-        Mapping::identity(self.len() as u32)
+    pub fn identity(&self) -> Mapping<I> {
+        Mapping::identity(I::from_usize(self.len()))
     }
-}
 
-impl<T: ?Sized, Storage, H> Arena<T, Storage, H> {
     /// Returns a mapping to build an arena containing only the items of this
     /// arena that satisfy the given predicate.
-    pub fn retain(&self, filter: impl Fn(Interned<T, Storage, H>) -> bool) -> Mapping {
+    pub fn retain(&self, filter: impl Fn(Interned<T, Storage, H, I>) -> bool) -> Mapping<I> {
         Mapping::retain(self.len(), |i| filter(Interned::new(i)))
     }
 
@@ -47,7 +51,10 @@ impl<T: ?Sized, Storage, H> Arena<T, Storage, H> {
     /// See also [`retain_builder()`](Self::retain_builder) if you need a more
     /// flexible way of adding items to retain.
     #[cfg(feature = "retain")]
-    pub fn retain_values(&self, values: impl Iterator<Item = Interned<T, Storage, H>>) -> Mapping {
+    pub fn retain_values(
+        &self,
+        values: impl Iterator<Item = Interned<T, Storage, H, I>>,
+    ) -> Mapping<I> {
         let mut builder = self.retain_builder();
         for v in values {
             builder.insert(v);
@@ -58,7 +65,7 @@ impl<T: ?Sized, Storage, H> Arena<T, Storage, H> {
     /// Returns a builder allowing to select items to retain, and create an
     /// arena containing only these.
     #[cfg(feature = "retain")]
-    pub fn retain_builder(&self) -> RetainBuilder<T, Storage, H> {
+    pub fn retain_builder(&self) -> RetainBuilder<T, Storage, H, I> {
         let len = self.len();
         RetainBuilder {
             len,
@@ -68,16 +75,17 @@ impl<T: ?Sized, Storage, H> Arena<T, Storage, H> {
     }
 }
 
-impl<T: ?Sized, Storage, H> Arena<T, Storage, H>
+impl<T: ?Sized, Storage, H, I> Arena<T, Storage, H, I>
 where
     T: Eq + Hash,
     Storage: Borrow<T> + Clone,
+    I: Index,
 {
     /// Returns a re-ordered version of this arena based on the given mapping.
     ///
     /// See also [`map_rehash()`](Self::map_rehash) to use a different hash
     /// function in the resulting arena.
-    pub fn map(&self, mapping: &ReverseMapping) -> Self
+    pub fn map(&self, mapping: &ReverseMapping<I>) -> Self
     where
         H: Default + BuildHasher,
     {
@@ -88,9 +96,9 @@ where
     ///
     /// See also [`map()`](Self::map) if the resulting arena uses the same hash
     /// function.
-    pub fn map_rehash<I>(&self, mapping: &ReverseMapping) -> Arena<T, Storage, I>
+    pub fn map_rehash<HH>(&self, mapping: &ReverseMapping<I>) -> Arena<T, Storage, HH, I>
     where
-        I: Default + BuildHasher,
+        HH: Default + BuildHasher,
     {
         let mut arena = Arena::with_capacity(mapping.len());
         for i in mapping.iter() {
@@ -109,7 +117,7 @@ where
     ///
     /// See also [`map2_rehash()`](Self::map2_rehash) to use a different hash
     /// function in the resulting arena.
-    pub fn map2(&self, mapping: &ReverseMapping, f: impl Fn(&T) -> Storage) -> Self
+    pub fn map2(&self, mapping: &ReverseMapping<I>, f: impl Fn(&T) -> Storage) -> Self
     where
         H: Default + BuildHasher,
     {
@@ -126,13 +134,13 @@ where
     ///
     /// See also [`map2()`](Self::map2) if the resulting arena uses the same
     /// hash function.
-    pub fn map2_rehash<I>(
+    pub fn map2_rehash<HH>(
         &self,
-        mapping: &ReverseMapping,
+        mapping: &ReverseMapping<I>,
         f: impl Fn(&T) -> Storage,
-    ) -> Arena<T, Storage, I>
+    ) -> Arena<T, Storage, HH, I>
     where
-        I: Default + BuildHasher,
+        HH: Default + BuildHasher,
     {
         let mut arena = Arena::with_capacity(mapping.len());
         for i in mapping.iter() {
@@ -147,36 +155,40 @@ where
 /// This struct is created by the [`retain_builder()`](Arena::retain_builder)
 /// method on [`Arena`].
 #[cfg(feature = "retain")]
-pub struct RetainBuilder<T: ?Sized, Storage = T, H = DefaultHashBuilder> {
+pub struct RetainBuilder<T: ?Sized, Storage = T, H = DefaultHashBuilder, I = u32> {
     len: usize,
     retained: BitSet,
-    _phantom: PhantomData<Interned<T, Storage, H>>,
+    _phantom: PhantomData<Interned<T, Storage, H, I>>,
 }
 
 #[cfg(feature = "retain")]
-impl<T: ?Sized, Storage, H> RetainBuilder<T, Storage, H> {
+impl<T: ?Sized, Storage, H, I> RetainBuilder<T, Storage, H, I>
+where
+    I: Index,
+{
     /// Marks the given item as retained.
     ///
     /// Returns [`true`] if the item is newly inserted and [`false`] if it was
     /// already inserted before.
-    pub fn insert(&mut self, value: Interned<T, Storage, H>) -> bool {
-        self.retained.insert(value.id_() as usize)
+    pub fn insert(&mut self, value: Interned<T, Storage, H, I>) -> bool {
+        self.retained.insert(value.id_().to_usize())
     }
 
     /// Returns a mapping to build an [`Arena`] containing only the items that
     /// have been retained via [`insert()`](Self::insert).
-    pub fn build(self) -> Mapping {
-        Mapping::retain(self.len, |i| self.retained.contains(i as usize))
+    pub fn build(self) -> Mapping<I> {
+        Mapping::retain(self.len, |i: I| self.retained.contains(i.to_usize()))
     }
 }
 
-impl<T, H> ArenaSlice<T, H>
+impl<T, H, I> ArenaSlice<T, H, I>
 where
     T: Ord,
+    I: Index,
 {
     /// Returns a sorted mapping of the items in this arena.
-    pub fn sort(&self) -> Mapping {
-        let mut mapping: Vec<u32> = (0..self.slices() as u32).collect();
+    pub fn sort(&self) -> Mapping<I> {
+        let mut mapping: Vec<I> = (0..self.slices()).map(I::from_usize).collect();
         mapping.sort_by_cached_key(|i| CustomSliceOrd(self.lookup(InternedSlice::new(*i))));
         let reverse = ReverseMapping::new(mapping.into_boxed_slice());
         let forward = reverse.reverse();
@@ -184,10 +196,13 @@ where
     }
 }
 
-impl<T, H> ArenaSlice<T, H> {
+impl<T, H, I> ArenaSlice<T, H, I>
+where
+    I: Index,
+{
     /// Returns a mapping to build an arena containing only the items of this
     /// arena that satisfy the given predicate.
-    pub fn retain(&self, filter: impl Fn(InternedSlice<T, H>) -> bool) -> Mapping {
+    pub fn retain(&self, filter: impl Fn(InternedSlice<T, H, I>) -> bool) -> Mapping<I> {
         Mapping::retain(self.slices(), |i| filter(InternedSlice::new(i)))
     }
 
@@ -196,7 +211,10 @@ impl<T, H> ArenaSlice<T, H> {
     /// See also [`retain_builder()`](Self::retain_builder) if you need a more
     /// flexible way of adding items to retain.
     #[cfg(feature = "retain")]
-    pub fn retain_values(&self, values: impl Iterator<Item = InternedSlice<T, H>>) -> Mapping {
+    pub fn retain_values(
+        &self,
+        values: impl Iterator<Item = InternedSlice<T, H, I>>,
+    ) -> Mapping<I> {
         let mut builder = self.retain_builder();
         for v in values {
             builder.insert(v);
@@ -207,7 +225,7 @@ impl<T, H> ArenaSlice<T, H> {
     /// Returns a builder allowing to select items to retain, and create an
     /// arena containing only these.
     #[cfg(feature = "retain")]
-    pub fn retain_builder(&self) -> RetainSliceBuilder<T, H> {
+    pub fn retain_builder(&self) -> RetainSliceBuilder<T, H, I> {
         let len = self.slices();
         RetainSliceBuilder {
             len,
@@ -217,15 +235,16 @@ impl<T, H> ArenaSlice<T, H> {
     }
 }
 
-impl<T, H> ArenaSlice<T, H>
+impl<T, H, I> ArenaSlice<T, H, I>
 where
     T: Default + Clone + Eq + Hash,
+    I: Index,
 {
     /// Returns a re-ordered version of this arena based on the given mapping.
     ///
     /// See also [`map_rehash()`](Self::map_rehash) to use a different hash
     /// function in the resulting arena.
-    pub fn map(&self, mapping: &ReverseMapping) -> Self
+    pub fn map(&self, mapping: &ReverseMapping<I>) -> Self
     where
         H: Default + BuildHasher,
     {
@@ -236,9 +255,9 @@ where
     ///
     /// See also [`map()`](Self::map) if the resulting arena uses the same hash
     /// function.
-    pub fn map_rehash<I>(&self, mapping: &ReverseMapping) -> ArenaSlice<T, I>
+    pub fn map_rehash<HH>(&self, mapping: &ReverseMapping<I>) -> ArenaSlice<T, HH, I>
     where
-        I: Default + BuildHasher,
+        HH: Default + BuildHasher,
     {
         let mut arena = ArenaSlice::with_capacity(mapping.len(), self.items());
         for i in mapping.iter() {
@@ -248,9 +267,10 @@ where
     }
 }
 
-impl<T, H> ArenaSlice<T, H>
+impl<T, H, I> ArenaSlice<T, H, I>
 where
     T: Default + Eq + Hash,
+    I: Index,
 {
     /// Returns a re-ordered version of this arena based on the given mapping,
     /// where each slice element is additionally transformed according to
@@ -262,7 +282,7 @@ where
     ///
     /// See also [`map2_rehash()`](Self::map2_rehash) to use a different hash
     /// function in the resulting arena.
-    pub fn map2(&self, mapping: &ReverseMapping, f: impl Fn(&T) -> T) -> Self
+    pub fn map2(&self, mapping: &ReverseMapping<I>, f: impl Fn(&T) -> T) -> Self
     where
         H: Default + BuildHasher,
     {
@@ -279,9 +299,13 @@ where
     ///
     /// See also [`map2()`](Self::map2) if the resulting arena uses the same
     /// hash function.
-    pub fn map2_rehash<I>(&self, mapping: &ReverseMapping, f: impl Fn(&T) -> T) -> ArenaSlice<T, I>
+    pub fn map2_rehash<HH>(
+        &self,
+        mapping: &ReverseMapping<I>,
+        f: impl Fn(&T) -> T,
+    ) -> ArenaSlice<T, HH, I>
     where
-        I: Default + BuildHasher,
+        HH: Default + BuildHasher,
     {
         let mut arena = ArenaSlice::with_capacity(mapping.len(), self.items());
         for i in mapping.iter() {
@@ -300,26 +324,29 @@ where
 /// This struct is created by the
 /// [`retain_builder()`](ArenaSlice::retain_builder) method on [`ArenaSlice`].
 #[cfg(feature = "retain")]
-pub struct RetainSliceBuilder<T, H = DefaultHashBuilder> {
+pub struct RetainSliceBuilder<T, H = DefaultHashBuilder, I = u32> {
     len: usize,
     retained: BitSet,
-    _phantom: PhantomData<InternedSlice<T, H>>,
+    _phantom: PhantomData<InternedSlice<T, H, I>>,
 }
 
 #[cfg(feature = "retain")]
-impl<T, H> RetainSliceBuilder<T, H> {
+impl<T, H, I> RetainSliceBuilder<T, H, I>
+where
+    I: Index,
+{
     /// Marks the given item as retained.
     ///
     /// Returns [`true`] if the item is newly inserted and [`false`] if it was
     /// already inserted before.
-    pub fn insert(&mut self, value: InternedSlice<T, H>) -> bool {
-        self.retained.insert(value.id_() as usize)
+    pub fn insert(&mut self, value: InternedSlice<T, H, I>) -> bool {
+        self.retained.insert(value.id_().to_usize())
     }
 
     /// Returns a mapping to build an [`ArenaSlice`] containing only the items
     /// that have been retained via [`insert()`](Self::insert).
-    pub fn build(self) -> Mapping {
-        Mapping::retain(self.len, |i| self.retained.contains(i as usize))
+    pub fn build(self) -> Mapping<I> {
+        Mapping::retain(self.len, |i: I| self.retained.contains(i.to_usize()))
     }
 }
 
@@ -341,10 +368,13 @@ impl<T: Ord> Ord for CustomSliceOrd<'_, T> {
     }
 }
 
-impl<H> ArenaStr<H> {
+impl<H, I> ArenaStr<H, I>
+where
+    I: Index,
+{
     /// Returns a sorted mapping of the items in this arena.
-    pub fn sort(&self) -> Mapping {
-        let mut mapping: Vec<u32> = (0..self.strings() as u32).collect();
+    pub fn sort(&self) -> Mapping<I> {
+        let mut mapping: Vec<I> = (0..self.strings()).map(I::from_usize).collect();
         mapping.sort_by_cached_key(|i| CustomStrOrd(self.lookup(InternedStr::new(*i))));
         let reverse = ReverseMapping::new(mapping.into_boxed_slice());
         let forward = reverse.reverse();
@@ -353,7 +383,7 @@ impl<H> ArenaStr<H> {
 
     /// Returns a mapping to build an arena containing only the items of this
     /// arena that satisfy the given predicate.
-    pub fn retain(&self, filter: impl Fn(InternedStr<H>) -> bool) -> Mapping {
+    pub fn retain(&self, filter: impl Fn(InternedStr<H, I>) -> bool) -> Mapping<I> {
         Mapping::retain(self.strings(), |i| filter(InternedStr::new(i)))
     }
 
@@ -362,7 +392,7 @@ impl<H> ArenaStr<H> {
     /// See also [`retain_builder()`](Self::retain_builder) if you need a more
     /// flexible way of adding items to retain.
     #[cfg(feature = "retain")]
-    pub fn retain_values(&self, values: impl Iterator<Item = InternedStr<H>>) -> Mapping {
+    pub fn retain_values(&self, values: impl Iterator<Item = InternedStr<H, I>>) -> Mapping<I> {
         let mut builder = self.retain_builder();
         for v in values {
             builder.insert(v);
@@ -373,7 +403,7 @@ impl<H> ArenaStr<H> {
     /// Returns a builder allowing to select items to retain, and create an
     /// arena containing only these.
     #[cfg(feature = "retain")]
-    pub fn retain_builder(&self) -> RetainStrBuilder<H> {
+    pub fn retain_builder(&self) -> RetainStrBuilder<H, I> {
         let len = self.strings();
         RetainStrBuilder {
             len,
@@ -383,12 +413,15 @@ impl<H> ArenaStr<H> {
     }
 }
 
-impl<H> ArenaStr<H> {
+impl<H, I> ArenaStr<H, I>
+where
+    I: Index,
+{
     /// Returns a re-ordered version of this arena based on the given mapping.
     ///
     /// See also [`map_rehash()`](Self::map_rehash) to use a different hash
     /// function in the resulting arena.
-    pub fn map(&self, mapping: &ReverseMapping) -> Self
+    pub fn map(&self, mapping: &ReverseMapping<I>) -> Self
     where
         H: Default + BuildHasher,
     {
@@ -399,9 +432,9 @@ impl<H> ArenaStr<H> {
     ///
     /// See also [`map()`](Self::map) if the resulting arena uses the same hash
     /// function.
-    pub fn map_rehash<I>(&self, mapping: &ReverseMapping) -> ArenaStr<I>
+    pub fn map_rehash<HH>(&self, mapping: &ReverseMapping<I>) -> ArenaStr<HH, I>
     where
-        I: Default + BuildHasher,
+        HH: Default + BuildHasher,
     {
         let mut arena = ArenaStr::with_capacity(mapping.len(), self.bytes());
         for i in mapping.iter() {
@@ -416,26 +449,29 @@ impl<H> ArenaStr<H> {
 /// This struct is created by the [`retain_builder()`](ArenaStr::retain_builder)
 /// method on [`ArenaStr`].
 #[cfg(feature = "retain")]
-pub struct RetainStrBuilder<H = DefaultHashBuilder> {
+pub struct RetainStrBuilder<H = DefaultHashBuilder, I = u32> {
     len: usize,
     retained: BitSet,
-    _phantom: PhantomData<InternedStr<H>>,
+    _phantom: PhantomData<InternedStr<H, I>>,
 }
 
 #[cfg(feature = "retain")]
-impl<H> RetainStrBuilder<H> {
+impl<H, I> RetainStrBuilder<H, I>
+where
+    I: Index,
+{
     /// Marks the given item as retained.
     ///
     /// Returns [`true`] if the item is newly inserted and [`false`] if it was
     /// already inserted before.
-    pub fn insert(&mut self, value: InternedStr<H>) -> bool {
-        self.retained.insert(value.id_() as usize)
+    pub fn insert(&mut self, value: InternedStr<H, I>) -> bool {
+        self.retained.insert(value.id_().to_usize())
     }
 
     /// Returns a mapping to build an [`ArenaStr`] containing only the items
     /// that have been retained via [`insert()`](Self::insert).
-    pub fn build(self) -> Mapping {
-        Mapping::retain(self.len, |i| self.retained.contains(i as usize))
+    pub fn build(self) -> Mapping<I> {
+        Mapping::retain(self.len, |i: I| self.retained.contains(i.to_usize()))
     }
 }
 
@@ -458,16 +494,16 @@ impl Ord for CustomStrOrd<'_> {
 }
 
 /// A mapping to re-order items in an [`Arena`], [`ArenaSlice`] or [`ArenaStr`].
-pub struct Mapping {
+pub struct Mapping<I = u32> {
     /// Forward mapping, to map interned handles.
-    pub forward: ForwardMapping,
+    pub forward: ForwardMapping<I>,
     /// Reverse mapping, to re-order the arena.
-    pub reverse: ReverseMapping,
+    pub reverse: ReverseMapping<I>,
 }
 
-impl Mapping {
+impl<I: Index> Mapping<I> {
     /// Creates a new identity mapping with the given number of items.
-    pub fn identity(count: u32) -> Self {
+    pub fn identity(count: I) -> Self {
         Self {
             forward: ForwardMapping::identity(count),
             reverse: ReverseMapping::identity(count),
@@ -485,8 +521,8 @@ impl Mapping {
     /// a different hash function.
     pub fn map<T: ?Sized, Storage, H>(
         &self,
-        index: Interned<T, Storage, H>,
-    ) -> Interned<T, Storage, H> {
+        index: Interned<T, Storage, H, I>,
+    ) -> Interned<T, Storage, H, I> {
         self.forward.map(index)
     }
 
@@ -494,7 +530,7 @@ impl Mapping {
     ///
     /// See also [`map_slice_rehash()`](Self::map_slice_rehash) if the resulting
     /// arena uses a different hash function.
-    pub fn map_slice<T, H>(&self, index: InternedSlice<T, H>) -> InternedSlice<T, H> {
+    pub fn map_slice<T, H>(&self, index: InternedSlice<T, H, I>) -> InternedSlice<T, H, I> {
         self.forward.map_slice(index)
     }
 
@@ -502,7 +538,7 @@ impl Mapping {
     ///
     /// See also [`map_str_rehash()`](Self::map_str_rehash) if the resulting
     /// arena uses a different hash function.
-    pub fn map_str<H>(&self, index: InternedStr<H>) -> InternedStr<H> {
+    pub fn map_str<H>(&self, index: InternedStr<H, I>) -> InternedStr<H, I> {
         self.forward.map_str(index)
     }
 
@@ -510,10 +546,10 @@ impl Mapping {
     ///
     /// See also [`map()`](Self::map) if the resulting arena uses the same hash
     /// function.
-    pub fn map_rehash<T: ?Sized, Storage, H, I>(
+    pub fn map_rehash<T: ?Sized, Storage, H, HH>(
         &self,
-        index: Interned<T, Storage, H>,
-    ) -> Interned<T, Storage, I> {
+        index: Interned<T, Storage, H, I>,
+    ) -> Interned<T, Storage, HH, I> {
         self.forward.map_rehash(index)
     }
 
@@ -521,7 +557,10 @@ impl Mapping {
     ///
     /// See also [`map_slice()`](Self::map_slice) if the resulting arena uses
     /// the same hash function.
-    pub fn map_slice_rehash<T, H, I>(&self, index: InternedSlice<T, H>) -> InternedSlice<T, I> {
+    pub fn map_slice_rehash<T, H, HH>(
+        &self,
+        index: InternedSlice<T, H, I>,
+    ) -> InternedSlice<T, HH, I> {
         self.forward.map_slice_rehash(index)
     }
 
@@ -529,30 +568,30 @@ impl Mapping {
     ///
     /// See also [`map_str()`](Self::map_str) if the resulting arena uses the
     /// same hash function.
-    pub fn map_str_rehash<H, I>(&self, index: InternedStr<H>) -> InternedStr<I> {
+    pub fn map_str_rehash<H, HH>(&self, index: InternedStr<H, I>) -> InternedStr<HH, I> {
         self.forward.map_str_rehash(index)
     }
 
-    fn retain(len: usize, filter: impl Fn(u32) -> bool) -> Self {
+    fn retain(len: usize, filter: impl Fn(I) -> bool) -> Self {
         let mut reverse = Vec::new();
         let mut forward = Vec::with_capacity(len);
-        let mut next = 0;
+        let mut next = I::ZERO;
         let mut is_identity = true;
 
-        for i in 0..len as u32 {
+        for i in (0..len).map(I::from_usize) {
             if filter(i) {
                 reverse.push(i);
                 forward.push(next);
-                next += 1;
+                next.incr();
             } else {
-                forward.push(u32::MAX);
+                forward.push(I::MAX);
                 is_identity = false;
             }
         }
 
         let reverse = ReverseMapping::new(reverse.into_boxed_slice());
         let forward = if is_identity {
-            MappingImpl::Identity(len as u32)
+            MappingImpl::Identity(I::from_usize(len))
         } else {
             MappingImpl::Map(forward.into_boxed_slice())
         };
@@ -565,40 +604,40 @@ impl Mapping {
 
 /// A mapping to re-order items in an [`Arena`], [`ArenaSlice`] or [`ArenaStr`].
 #[cfg_attr(test, derive(PartialEq, Eq, Debug))]
-pub struct ReverseMapping(MappingImpl);
+pub struct ReverseMapping<I = u32>(MappingImpl<I>);
 
-impl ReverseMapping {
+impl<I: Index> ReverseMapping<I> {
     /// Creates a new identity mapping with the given number of items.
-    fn identity(count: u32) -> Self {
+    fn identity(count: I) -> Self {
         Self(MappingImpl::Identity(count))
     }
 
-    fn new(map: Box<[u32]>) -> Self {
+    fn new(map: Box<[I]>) -> Self {
         Self(MappingImpl::new(map))
     }
 
     /// Returns the number of mapped items.
     fn len(&self) -> usize {
-        self.0.len() as usize
+        self.0.len().to_usize()
     }
 
-    fn reverse(&self) -> ForwardMapping {
+    fn reverse(&self) -> ForwardMapping<I> {
         ForwardMapping(self.0.reverse())
     }
 
     /// Returns the mapped indices in order.
-    pub fn iter(&self) -> impl ExactSizeIterator<Item = u32> {
+    pub fn iter(&self) -> impl ExactSizeIterator<Item = I> {
         self.0.iter()
     }
 }
 
 /// A mapping to re-order items in an [`Arena`], [`ArenaSlice`] or [`ArenaStr`].
 #[cfg_attr(test, derive(Clone, PartialEq, Eq, Debug))]
-pub struct ForwardMapping(MappingImpl);
+pub struct ForwardMapping<I = u32>(MappingImpl<I>);
 
-impl ForwardMapping {
+impl<I: Index> ForwardMapping<I> {
     /// Creates a new identity mapping with the given number of items.
-    pub fn identity(count: u32) -> Self {
+    pub fn identity(count: I) -> Self {
         Self(MappingImpl::Identity(count))
     }
 
@@ -613,8 +652,8 @@ impl ForwardMapping {
     /// a different hash function.
     pub fn map<T: ?Sized, Storage, H>(
         &self,
-        index: Interned<T, Storage, H>,
-    ) -> Interned<T, Storage, H> {
+        index: Interned<T, Storage, H, I>,
+    ) -> Interned<T, Storage, H, I> {
         self.map_rehash(index)
     }
 
@@ -622,7 +661,7 @@ impl ForwardMapping {
     ///
     /// See also [`map_slice_rehash()`](Self::map_slice_rehash) if the resulting
     /// arena uses a different hash function.
-    pub fn map_slice<T, H>(&self, index: InternedSlice<T, H>) -> InternedSlice<T, H> {
+    pub fn map_slice<T, H>(&self, index: InternedSlice<T, H, I>) -> InternedSlice<T, H, I> {
         self.map_slice_rehash(index)
     }
 
@@ -630,7 +669,7 @@ impl ForwardMapping {
     ///
     /// See also [`map_str_rehash()`](Self::map_str_rehash) if the resulting
     /// arena uses a different hash function.
-    pub fn map_str<H>(&self, index: InternedStr<H>) -> InternedStr<H> {
+    pub fn map_str<H>(&self, index: InternedStr<H, I>) -> InternedStr<H, I> {
         self.map_str_rehash(index)
     }
 
@@ -638,10 +677,10 @@ impl ForwardMapping {
     ///
     /// See also [`map()`](Self::map) if the resulting arena uses the same hash
     /// function.
-    pub fn map_rehash<T: ?Sized, Storage, H, I>(
+    pub fn map_rehash<T: ?Sized, Storage, H, HH>(
         &self,
-        index: Interned<T, Storage, H>,
-    ) -> Interned<T, Storage, I> {
+        index: Interned<T, Storage, H, I>,
+    ) -> Interned<T, Storage, HH, I> {
         Interned::new(self.0.at(index.id_()))
     }
 
@@ -649,7 +688,10 @@ impl ForwardMapping {
     ///
     /// See also [`map_slice()`](Self::map_slice) if the resulting arena uses
     /// the same hash function.
-    pub fn map_slice_rehash<T, H, I>(&self, index: InternedSlice<T, H>) -> InternedSlice<T, I> {
+    pub fn map_slice_rehash<T, H, HH>(
+        &self,
+        index: InternedSlice<T, H, I>,
+    ) -> InternedSlice<T, HH, I> {
         InternedSlice::new(self.0.at(index.id_()))
     }
 
@@ -657,7 +699,7 @@ impl ForwardMapping {
     ///
     /// See also [`map_str()`](Self::map_str) if the resulting arena uses the
     /// same hash function.
-    pub fn map_str_rehash<H, I>(&self, index: InternedStr<H>) -> InternedStr<I> {
+    pub fn map_str_rehash<H, HH>(&self, index: InternedStr<H, I>) -> InternedStr<HH, I> {
         InternedStr::new(self.0.at(index.id_()))
     }
 
@@ -677,16 +719,16 @@ impl ForwardMapping {
 }
 
 #[cfg_attr(test, derive(Clone, PartialEq, Eq, Debug))]
-enum MappingImpl {
-    Identity(u32),
-    Map(Box<[u32]>),
+enum MappingImpl<I> {
+    Identity(I),
+    Map(Box<[I]>),
 }
 
-impl MappingImpl {
-    fn new(map: Box<[u32]>) -> Self {
+impl<I: Index> MappingImpl<I> {
+    fn new(map: Box<[I]>) -> Self {
         // Check if the map is the identity.
-        if map.iter().enumerate().all(|(i, j)| i == *j as usize) {
-            MappingImpl::Identity(map.len() as u32)
+        if map.iter().enumerate().all(|(i, j)| i == j.to_usize()) {
+            MappingImpl::Identity(I::from_usize(map.len()))
         } else {
             MappingImpl::Map(map)
         }
@@ -700,21 +742,21 @@ impl MappingImpl {
         }
     }
 
-    fn len(&self) -> u32 {
+    fn len(&self) -> I {
         match self {
             Self::Identity(len) => *len,
-            Self::Map(map) => map.len() as u32,
+            Self::Map(map) => I::from_usize(map.len()),
         }
     }
 
-    fn at(&self, index: u32) -> u32 {
+    fn at(&self, index: I) -> I {
         match self {
             MappingImpl::Identity(_) => index,
-            MappingImpl::Map(map) => map[index as usize],
+            MappingImpl::Map(map) => map[index.to_usize()],
         }
     }
 
-    fn compose(self, other: MappingImpl) -> Self {
+    fn compose(self, other: MappingImpl<I>) -> Self {
         let len = self.len();
         assert_eq!(len, other.len());
         match (self, other) {
@@ -722,28 +764,28 @@ impl MappingImpl {
             (MappingImpl::Map(map), MappingImpl::Identity(_))
             | (MappingImpl::Identity(_), MappingImpl::Map(map)) => MappingImpl::Map(map),
             (MappingImpl::Map(left), MappingImpl::Map(right)) => {
-                let map = left.iter().map(|i| right[*i as usize]).collect();
+                let map = left.iter().map(|i| right[i.to_usize()]).collect();
                 Self::new(map)
             }
         }
     }
 
-    fn reverse(&self) -> MappingImpl {
+    fn reverse(&self) -> MappingImpl<I> {
         match self {
             MappingImpl::Identity(len) => MappingImpl::Identity(*len),
             MappingImpl::Map(map) => {
-                let mut reverse = vec![0; map.len()];
-                for i in 0..map.len() as u32 {
-                    reverse[map[i as usize] as usize] = i;
+                let mut reverse = vec![I::ZERO; map.len()];
+                for i in 0..map.len() {
+                    reverse[map[i].to_usize()] = I::from_usize(i);
                 }
                 MappingImpl::Map(reverse.into_boxed_slice())
             }
         }
     }
 
-    fn iter(&self) -> impl ExactSizeIterator<Item = u32> {
+    fn iter(&self) -> impl ExactSizeIterator<Item = I> {
         match self {
-            Self::Identity(len) => Either::Left(0..*len),
+            Self::Identity(len) => Either::Left((0..len.to_usize()).map(I::from_usize)),
             Self::Map(map) => Either::Right(map.iter().copied()),
         }
     }
@@ -756,7 +798,7 @@ impl MappingImpl {
             Self::Map(map) => map
                 .iter()
                 .enumerate()
-                .filter(|&(i, j)| i != *j as usize)
+                .filter(|&(i, j)| i != j.to_usize())
                 .count(),
         }
     }
@@ -934,25 +976,25 @@ mod test {
 
     #[test]
     fn reverse_mapping_iter() {
-        let mapping = ReverseMapping(MappingImpl::new(Box::new([2, 1, 4, 0, 3])));
+        let mapping = ReverseMapping(MappingImpl::<u32>::new(Box::new([2, 1, 4, 0, 3])));
         assert_eq!(mapping.iter().collect::<Vec<_>>(), vec![2, 1, 4, 0, 3]);
     }
 
     #[test]
     fn reverse_mapping_reverse() {
-        let mapping = ReverseMapping(MappingImpl::new(Box::new([2, 1, 4, 0, 3])));
+        let mapping = ReverseMapping(MappingImpl::<u32>::new(Box::new([2, 1, 4, 0, 3])));
         assert_eq!(
             mapping.reverse(),
             ForwardMapping(MappingImpl::Map(Box::new([3, 1, 0, 4, 2])))
         );
 
-        let mapping = ReverseMapping(MappingImpl::new(Box::new([0, 1, 2, 3, 4])));
+        let mapping = ReverseMapping(MappingImpl::<u32>::new(Box::new([0, 1, 2, 3, 4])));
         assert_eq!(mapping.reverse(), ForwardMapping(MappingImpl::Identity(5)));
     }
 
     #[test]
     fn forward_mapping_map() {
-        let mapping = ForwardMapping(MappingImpl::Map(Box::new([3, 1, 0, 4, 2])));
+        let mapping = ForwardMapping(MappingImpl::<u32>::Map(Box::new([3, 1, 0, 4, 2])));
         assert_eq!(mapping.map(InternedU32::new(0)), InternedU32::new(3));
         assert_eq!(mapping.map(InternedU32::new(1)), InternedU32::new(1));
         assert_eq!(mapping.map(InternedU32::new(2)), InternedU32::new(0));
@@ -969,8 +1011,8 @@ mod test {
 
     #[test]
     fn forward_mapping_compose() {
-        let mapping1 = ForwardMapping(MappingImpl::Map(Box::new([3, 1, 0, 4, 2])));
-        let mapping2 = ForwardMapping(MappingImpl::Map(Box::new([4, 0, 2, 3, 1])));
+        let mapping1 = ForwardMapping(MappingImpl::<u32>::Map(Box::new([3, 1, 0, 4, 2])));
+        let mapping2 = ForwardMapping(MappingImpl::<u32>::Map(Box::new([4, 0, 2, 3, 1])));
         let composed = mapping1.clone().compose(mapping2.clone());
         assert_eq!(
             composed,
@@ -986,7 +1028,7 @@ mod test {
     #[cfg(feature = "debug")]
     #[test]
     fn forward_mapping_count_remapped() {
-        let mapping = ForwardMapping(MappingImpl::Map(Box::new([3, 1, 0, 4, 2])));
+        let mapping = ForwardMapping(MappingImpl::<u32>::Map(Box::new([3, 1, 0, 4, 2])));
         assert_eq!(mapping.count_remapped(), 4);
     }
 }

@@ -22,7 +22,7 @@ delta = []
 get-size2 = ["dep:get-size2", "appendvec?/get-size2", "dashtable?/get-size2"]
 raw = []
 retain = ["dep:bit-set"]
-serde = ["dep:serde", "dep:serde_tuple"]
+serde = ["dep:serde"]
 std = []
 sync = ["dep:appendvec", "dep:dashtable"]
 
@@ -35,7 +35,6 @@ get-size2 = { optional = true, version = "0.11.0", default-features = false, fea
 hashbrown = "0.17.1"
 serde = { optional = true, version = "1.0.229", default-features = false, features = ["derive"] }
 serde_cow = "0.1.2"
-serde_tuple = { optional = true, version = "1.1.3", default-features = false }
 
 [dev-dependencies]
 postcard = { version = "1.1.3", features = ["use-std"] }

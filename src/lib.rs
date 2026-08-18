@@ -38,6 +38,7 @@ extern crate alloc;
 
 #[cfg(feature = "delta")]
 mod delta;
+mod index;
 mod mapping;
 mod slice;
 mod str;
@@ -62,6 +63,7 @@ use get_size2::{GetSize, GetSizeTracker};
 use hashbrown::DefaultHashBuilder;
 #[cfg(not(feature = "sync"))]
 use hashbrown::HashTable;
+pub use index::{Index, U24, U40, U48, U56};
 pub use mapping::{ForwardMapping, Mapping, ReverseMapping};
 #[cfg(feature = "retain")]
 pub use mapping::{RetainBuilder, RetainSliceBuilder, RetainStrBuilder};
@@ -69,7 +71,7 @@ pub use mapping::{RetainBuilder, RetainSliceBuilder, RetainStrBuilder};
 use serde::de::{SeqAccess, Visitor};
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use slice::CopyRangeU32;
+use slice::CopyRange;
 pub use slice::{ArenaSlice, InternedSlice};
 pub use str::{ArenaStr, InternedStr};
 
@@ -81,112 +83,123 @@ pub use str::{ArenaStr, InternedStr};
 /// [`str`](prim@str), you need to specify a [`Sized`] storage type, such as
 /// `Box<T>`.
 #[cfg_attr(feature = "get-size2", derive(GetSize))]
-pub struct Interned<T: ?Sized, Storage = T, H = DefaultHashBuilder> {
-    id: u32,
+pub struct Interned<T: ?Sized, Storage = T, H = DefaultHashBuilder, I = u32> {
+    id: I,
     #[expect(clippy::type_complexity)]
     _phantom: PhantomData<fn() -> (*const T, *const Storage, H)>,
 }
 
-impl<T: ?Sized, Storage, H> Default for Interned<T, Storage, H> {
+impl<T: ?Sized, Storage, H, I: Index> Default for Interned<T, Storage, H, I> {
     fn default() -> Self {
-        Self::new(u32::MAX)
+        Self::new(I::MAX)
     }
 }
 
-impl<T: ?Sized, Storage, H> Debug for Interned<T, Storage, H> {
+impl<T: ?Sized, Storage, H, I: Index> Debug for Interned<T, Storage, H, I> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_tuple("I").field(&self.id).finish()
     }
 }
 
-impl<T: ?Sized, Storage, H> Clone for Interned<T, Storage, H> {
+impl<T: ?Sized, Storage, H, I: Index> Clone for Interned<T, Storage, H, I> {
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<T: ?Sized, Storage, H> Copy for Interned<T, Storage, H> {}
+impl<T: ?Sized, Storage, H, I: Index> Copy for Interned<T, Storage, H, I> {}
 
-impl<T: ?Sized, Storage, H> PartialEq for Interned<T, Storage, H> {
+impl<T: ?Sized, Storage, H, I: Index> PartialEq for Interned<T, Storage, H, I> {
     fn eq(&self, other: &Self) -> bool {
         self.id.eq(&other.id)
     }
 }
 
-impl<T: ?Sized, Storage, H> Eq for Interned<T, Storage, H> {}
+impl<T: ?Sized, Storage, H, I: Index> Eq for Interned<T, Storage, H, I> {}
 
-impl<T: ?Sized, Storage, H> PartialOrd for Interned<T, Storage, H> {
+impl<T: ?Sized, Storage, H, I: Index> PartialOrd for Interned<T, Storage, H, I> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl<T: ?Sized, Storage, H> Ord for Interned<T, Storage, H> {
+impl<T: ?Sized, Storage, H, I: Index> Ord for Interned<T, Storage, H, I> {
     fn cmp(&self, other: &Self) -> Ordering {
         self.id.cmp(&other.id)
     }
 }
 
-impl<T: ?Sized, Storage, H> Hash for Interned<T, Storage, H> {
-    fn hash<I>(&self, state: &mut I)
+impl<T: ?Sized, Storage, H, I: Index> Hash for Interned<T, Storage, H, I> {
+    fn hash<G>(&self, state: &mut G)
     where
-        I: Hasher,
+        G: Hasher,
     {
         self.id.hash(state);
     }
 }
 
 #[cfg(feature = "raw")]
-impl<T: ?Sized, Storage, H> Interned<T, Storage, H> {
+impl<T: ?Sized, Storage, H, I> Interned<T, Storage, H, I> {
     /// Creates an interned value for the given index.
     ///
     /// This is a low-level function. You should instead use the
     /// [`Arena::intern()`] API to intern a value, unless you really know what
     /// you're doing.
-    pub fn from_id(id: u32) -> Self {
+    pub fn from_id(id: I) -> Self {
         Self::new(id)
     }
+}
 
+#[cfg(feature = "raw")]
+impl<T: ?Sized, Storage, H, I: Index> Interned<T, Storage, H, I> {
     /// Obtains the underlying interning index.
     ///
     /// This is a low-level function. You should instead use the
     /// [`Arena::lookup()`] and [`Arena::lookup_ref()`] APIs, unless you really
     /// know what you're doing.
-    pub fn id(&self) -> u32 {
+    pub fn id(&self) -> I {
         self.id
     }
 }
 
-impl<T: ?Sized, Storage, H> Interned<T, Storage, H> {
-    pub(crate) fn new(id: u32) -> Self {
+impl<T: ?Sized, Storage, H, I> Interned<T, Storage, H, I> {
+    pub(crate) fn new(id: I) -> Self {
         Self {
             id,
             _phantom: PhantomData,
         }
     }
+}
 
-    pub(crate) fn id_(&self) -> u32 {
+impl<T: ?Sized, Storage, H, I: Index> Interned<T, Storage, H, I> {
+    pub(crate) fn id_(&self) -> I {
         self.id
     }
 }
 
 #[cfg(feature = "serde")]
-impl<T: ?Sized, Storage, H> Serialize for Interned<T, Storage, H> {
+impl<T: ?Sized, Storage, H, I> Serialize for Interned<T, Storage, H, I>
+where
+    I: Serialize,
+{
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
-        serializer.serialize_u32(self.id)
+        self.id.serialize(serializer)
     }
 }
 
 #[cfg(feature = "serde")]
-impl<'de, T: ?Sized, Storage, H> Deserialize<'de> for Interned<T, Storage, H> {
+impl<'de, T: ?Sized, Storage, H, I> Deserialize<'de> for Interned<T, Storage, H, I>
+where
+    I: Deserialize<'de>,
+{
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
-        let id = u32::deserialize(deserializer)?;
+        let id = I::deserialize(deserializer)?;
         Ok(Self::new(id))
     }
 }
@@ -198,26 +211,27 @@ impl<'de, T: ?Sized, Storage, H> Deserialize<'de> for Interned<T, Storage, H> {
 /// overhead. For non-[`Sized`] values such as [`dyn
 /// Trait`](https://doc.rust-lang.org/stable/std/keyword.dyn.html), you need to
 /// specify a [`Sized`] storage type, such as `Box<dyn Trait>`.
-pub struct Arena<T: ?Sized, Storage = T, H = DefaultHashBuilder> {
+pub struct Arena<T: ?Sized, Storage = T, H = DefaultHashBuilder, I = u32> {
     #[cfg(not(feature = "sync"))]
     vec: Vec<Storage>,
     #[cfg(feature = "sync")]
     vec: AppendVec<Storage>,
     #[cfg(not(feature = "sync"))]
-    map: HashTable<u32>,
+    map: HashTable<I>,
     #[cfg(feature = "sync")]
-    map: DashTable<u32>,
+    map: DashTable<I>,
     hasher: H,
     #[cfg(feature = "debug")]
     references: AtomicUsize,
     _phantom: PhantomData<fn() -> *const T>,
 }
 
-impl<T: ?Sized, Storage, H> Clone for Arena<T, Storage, H>
+impl<T: ?Sized, Storage, H, I> Clone for Arena<T, Storage, H, I>
 where
     T: Eq + Hash,
     Storage: Borrow<T> + Clone,
     H: Default + BuildHasher,
+    I: Index,
 {
     fn clone(&self) -> Self {
         let iter = self.vec.iter();
@@ -229,7 +243,7 @@ where
     }
 }
 
-impl<T: ?Sized, Storage, H> Arena<T, Storage, H>
+impl<T: ?Sized, Storage, H, I> Arena<T, Storage, H, I>
 where
     H: Default,
 {
@@ -253,7 +267,7 @@ where
     }
 }
 
-impl<T: ?Sized, Storage, H> Arena<T, Storage, H> {
+impl<T: ?Sized, Storage, H, I> Arena<T, Storage, H, I> {
     /// Returns the number of values in this arena.
     ///
     /// Note that because [`Arena`] is a concurrent data structure, this is only
@@ -273,9 +287,10 @@ impl<T: ?Sized, Storage, H> Arena<T, Storage, H> {
     }
 }
 
-impl<T: ?Sized, Storage, H> Arena<T, Storage, H>
+impl<T: ?Sized, Storage, H, I> Arena<T, Storage, H, I>
 where
     Storage: Borrow<T>,
+    I: Index,
 {
     /// Returns an iterator over all items in this arena, in indexing order.
     ///
@@ -293,11 +308,12 @@ where
     }
 }
 
-impl<T: ?Sized, Storage, H> Arena<T, Storage, H>
+impl<T: ?Sized, Storage, H, I> Arena<T, Storage, H, I>
 where
     T: Eq + Hash,
     Storage: Borrow<T>,
     H: BuildHasher,
+    I: Index,
 {
     /// Returns the given value's [`Interned`] handle if it is already interned.
     ///
@@ -306,10 +322,10 @@ where
     ///
     /// See also [`find_mut()`](Self::find_mut), which is more efficient if you
     /// hold a mutable reference to this arena as it avoids acquiring locks.
-    pub fn find(&self, value: &T) -> Option<Interned<T, Storage, H>> {
+    pub fn find(&self, value: &T) -> Option<Interned<T, Storage, H, I>> {
         let hash = self.hasher.hash_one(value);
         self.map
-            .find(hash, |&i| self.vec[i as usize].borrow() == value)
+            .find(hash, |&i| self.vec[i.to_usize()].borrow() == value)
             .map(|id| Interned::new(*id))
     }
 
@@ -321,39 +337,40 @@ where
     /// Contrary to [`find()`](Self::find), no locks are held internally because
     /// this function already takes an exclusive mutable reference to this
     /// arena.
-    pub fn find_mut(&mut self, value: &T) -> Option<Interned<T, Storage, H>> {
+    pub fn find_mut(&mut self, value: &T) -> Option<Interned<T, Storage, H, I>> {
         let hash = self.hasher.hash_one(value);
         #[cfg(not(feature = "sync"))]
         return self
             .map
-            .find(hash, |&i| self.vec[i as usize].borrow() == value)
+            .find(hash, |&i| self.vec[i.to_usize()].borrow() == value)
             .map(|id| Interned::new(*id));
         #[cfg(feature = "sync")]
         return self
             .map
-            .find_mut(hash, |&i| self.vec[i as usize].borrow() == value)
+            .find_mut(hash, |&i| self.vec[i.to_usize()].borrow() == value)
             .map(|id| Interned::new(*id));
     }
 }
 
 #[cfg(feature = "raw")]
-impl<T: ?Sized, Storage, H> Arena<T, Storage, H>
+impl<T: ?Sized, Storage, H, I> Arena<T, Storage, H, I>
 where
     T: Eq + Hash,
     Storage: Borrow<T>,
     H: BuildHasher,
+    I: Index,
 {
     /// Unconditionally push a value, without validating that it's already
     /// interned.
     ///
     /// Calling this function multiple times with the same value doesn't violate
     /// safety, but the value will be stored multiple times in the arena.
-    pub fn push_mut(&mut self, value: Storage) -> u32 {
+    pub fn push_mut(&mut self, value: Storage) -> I {
         self.push(value)
     }
 }
 
-impl<T: ?Sized, Storage, H> Default for Arena<T, Storage, H>
+impl<T: ?Sized, Storage, H, I> Default for Arena<T, Storage, H, I>
 where
     H: Default,
 {
@@ -375,37 +392,41 @@ where
     }
 }
 
-impl<T: ?Sized, Storage, H> Debug for Arena<T, Storage, H>
+impl<T: ?Sized, Storage, H, I> Debug for Arena<T, Storage, H, I>
 where
     T: Debug,
     Storage: Borrow<T>,
+    I: Index,
 {
     fn fmt(&self, fmt: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         fmt.debug_list().entries(self.iter_()).finish()
     }
 }
 
-impl<T: ?Sized, Storage, H> PartialEq for Arena<T, Storage, H>
+impl<T: ?Sized, Storage, H, I> PartialEq for Arena<T, Storage, H, I>
 where
     T: Eq,
     Storage: Borrow<T>,
+    I: Index,
 {
     fn eq(&self, other: &Self) -> bool {
         self.iter_().eq(other.iter_())
     }
 }
 
-impl<T: ?Sized, Storage, H> Eq for Arena<T, Storage, H>
+impl<T: ?Sized, Storage, H, I> Eq for Arena<T, Storage, H, I>
 where
     T: Eq,
     Storage: Borrow<T>,
+    I: Index,
 {
 }
 
 #[cfg(feature = "get-size2")]
-impl<T: ?Sized, Storage, H> GetSize for Arena<T, Storage, H>
+impl<T: ?Sized, Storage, H, I> GetSize for Arena<T, Storage, H, I>
 where
     Storage: GetSize,
+    I: GetSize,
 {
     fn get_heap_size_with_tracker<Tr: GetSizeTracker>(&self, tracker: Tr) -> (usize, Tr) {
         let (size_vec, tracker) = GetSize::get_heap_size_with_tracker(&self.vec, tracker);
@@ -415,7 +436,7 @@ where
 }
 
 #[cfg(all(feature = "debug", feature = "std"))]
-impl<T: ?Sized, Storage, H> Arena<T, Storage, H>
+impl<T: ?Sized, Storage, H, I> Arena<T, Storage, H, I>
 where
     Storage: GetSize,
 {
@@ -439,7 +460,7 @@ where
 }
 
 #[cfg(feature = "debug")]
-impl<T: ?Sized, Storage, H> Arena<T, Storage, H> {
+impl<T: ?Sized, Storage, H, I> Arena<T, Storage, H, I> {
     /// Returns the total number of references to items in this arena.
     ///
     /// The underlying counter is incremented each time a value is interned,
@@ -449,11 +470,12 @@ impl<T: ?Sized, Storage, H> Arena<T, Storage, H> {
     }
 }
 
-impl<T: ?Sized, Storage, H> Arena<T, Storage, H>
+impl<T: ?Sized, Storage, H, I> Arena<T, Storage, H, I>
 where
     T: Eq + Hash,
     Storage: Borrow<T>,
     H: BuildHasher,
+    I: Index,
 {
     /// Interns the given value in this arena.
     ///
@@ -464,7 +486,7 @@ where
     /// See also [`intern_mut()`](Self::intern_mut), which is more efficient if
     /// you hold a mutable reference to this arena as it avoids acquiring locks.
     #[cfg(feature = "sync")]
-    pub fn intern(&self, value: impl Borrow<T> + Into<Storage>) -> Interned<T, Storage, H> {
+    pub fn intern(&self, value: impl Borrow<T> + Into<Storage>) -> Interned<T, Storage, H, I> {
         #[cfg(feature = "debug")]
         self.references.fetch_add(1, atomic::Ordering::Relaxed);
 
@@ -473,14 +495,14 @@ where
             .map
             .entry(
                 hash,
-                |&i| self.vec[i as usize].borrow() == value.borrow(),
-                |&i| self.hasher.hash_one(self.vec[i as usize].borrow()),
+                |&i| self.vec[i.to_usize()].borrow() == value.borrow(),
+                |&i| self.hasher.hash_one(self.vec[i.to_usize()].borrow()),
             )
             .or_insert_with(|| {
                 let x: Storage = value.into();
                 let id = self.vec.push(x);
-                assert!(id <= u32::MAX as usize);
-                id as u32
+                assert!(id <= I::MAX.to_usize());
+                I::from_usize(id)
             })
             .get();
         Interned::new(id)
@@ -495,7 +517,10 @@ where
     /// Contrary to [`intern()`](Self::intern), no locks are held internally
     /// because this function already takes an exclusive mutable reference to
     /// this arena.
-    pub fn intern_mut(&mut self, value: impl Borrow<T> + Into<Storage>) -> Interned<T, Storage, H> {
+    pub fn intern_mut(
+        &mut self,
+        value: impl Borrow<T> + Into<Storage>,
+    ) -> Interned<T, Storage, H, I> {
         #[cfg(feature = "debug")]
         {
             *self.references.get_mut() += 1;
@@ -505,14 +530,14 @@ where
         #[cfg(not(feature = "sync"))]
         let entry = self.map.entry(
             hash,
-            |&i| self.vec[i as usize].borrow() == value.borrow(),
-            |&i| self.hasher.hash_one(self.vec[i as usize].borrow()),
+            |&i| self.vec[i.to_usize()].borrow() == value.borrow(),
+            |&i| self.hasher.hash_one(self.vec[i.to_usize()].borrow()),
         );
         #[cfg(feature = "sync")]
         let entry = self.map.entry_mut(
             hash,
-            |&i| self.vec[i as usize].borrow() == value.borrow(),
-            |&i| self.hasher.hash_one(self.vec[i as usize].borrow()),
+            |&i| self.vec[i.to_usize()].borrow() == value.borrow(),
+            |&i| self.hasher.hash_one(self.vec[i.to_usize()].borrow()),
         );
         let id = *entry
             .or_insert_with(|| {
@@ -525,8 +550,8 @@ where
                 };
                 #[cfg(feature = "sync")]
                 let id = self.vec.push_mut(x);
-                assert!(id <= u32::MAX as usize);
-                id as u32
+                assert!(id <= I::MAX.to_usize());
+                I::from_usize(id)
             })
             .get();
         Interned::new(id)
@@ -537,7 +562,7 @@ where
     ///
     /// Calling this function multiple times with the same value doesn't violate
     /// safety, but the value will be stored multiple times in the arena.
-    pub(crate) fn push(&mut self, value: Storage) -> u32 {
+    pub(crate) fn push(&mut self, value: Storage) -> I {
         #[cfg(feature = "debug")]
         {
             *self.references.get_mut() += 1;
@@ -553,24 +578,25 @@ where
         };
         #[cfg(feature = "sync")]
         let id = self.vec.push_mut(value);
-        assert!(id <= u32::MAX as usize);
-        let id = id as u32;
+        assert!(id <= I::MAX.to_usize());
+        let id = I::from_usize(id);
 
         #[cfg(not(feature = "sync"))]
         self.map.insert_unique(hash, id, |&i| {
-            self.hasher.hash_one(self.vec[i as usize].borrow())
+            self.hasher.hash_one(self.vec[i.to_usize()].borrow())
         });
         #[cfg(feature = "sync")]
         self.map.insert_unique_mut(hash, id, |&i| {
-            self.hasher.hash_one(self.vec[i as usize].borrow())
+            self.hasher.hash_one(self.vec[i.to_usize()].borrow())
         });
         id
     }
 }
 
-impl<T: ?Sized, Storage, H> Arena<T, Storage, H>
+impl<T: ?Sized, Storage, H, I> Arena<T, Storage, H, I>
 where
     Storage: Clone,
+    I: Index,
 {
     /// Retrieves the given [`Interned`] value from this arena.
     ///
@@ -580,14 +606,15 @@ where
     ///
     /// See also [`lookup_ref()`](Self::lookup_ref) if you only need a
     /// reference.
-    pub fn lookup(&self, interned: Interned<T, Storage, H>) -> Storage {
-        self.vec[interned.id as usize].clone()
+    pub fn lookup(&self, interned: Interned<T, Storage, H, I>) -> Storage {
+        self.vec[interned.id.to_usize()].clone()
     }
 }
 
-impl<T: ?Sized, Storage, H> Arena<T, Storage, H>
+impl<T: ?Sized, Storage, H, I> Arena<T, Storage, H, I>
 where
     Storage: Borrow<T>,
+    I: Index,
 {
     /// Retrieves a reference to the given [`Interned`] value from this arena.
     ///
@@ -596,16 +623,17 @@ where
     /// a panic will happen.
     ///
     /// See also [`lookup()`](Self::lookup) if you need an owned value.
-    pub fn lookup_ref(&self, interned: Interned<T, Storage, H>) -> &T {
-        self.vec[interned.id as usize].borrow()
+    pub fn lookup_ref(&self, interned: Interned<T, Storage, H, I>) -> &T {
+        self.vec[interned.id.to_usize()].borrow()
     }
 }
 
 #[cfg(feature = "serde")]
-impl<T: ?Sized, Storage, H> Serialize for Arena<T, Storage, H>
+impl<T: ?Sized, Storage, H, I> Serialize for Arena<T, Storage, H, I>
 where
     T: Serialize,
     Storage: Borrow<T>,
+    I: Index,
 {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -616,11 +644,12 @@ where
 }
 
 #[cfg(feature = "serde")]
-impl<'de, T: ?Sized, Storage, H> Deserialize<'de> for Arena<T, Storage, H>
+impl<'de, T: ?Sized, Storage, H, I> Deserialize<'de> for Arena<T, Storage, H, I>
 where
     T: Eq + Hash,
     Storage: Borrow<T> + Deserialize<'de>,
     H: Default + BuildHasher,
+    I: Index,
 {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -631,13 +660,13 @@ where
 }
 
 #[cfg(feature = "serde")]
-struct ArenaVisitor<T: ?Sized, Storage, H> {
+struct ArenaVisitor<T: ?Sized, Storage, H, I> {
     #[expect(clippy::type_complexity)]
-    _phantom: PhantomData<fn() -> Arena<T, Storage, H>>,
+    _phantom: PhantomData<fn() -> Arena<T, Storage, H, I>>,
 }
 
 #[cfg(feature = "serde")]
-impl<T: ?Sized, Storage, H> ArenaVisitor<T, Storage, H> {
+impl<T: ?Sized, Storage, H, I> ArenaVisitor<T, Storage, H, I> {
     fn new() -> Self {
         Self {
             _phantom: PhantomData,
@@ -646,13 +675,14 @@ impl<T: ?Sized, Storage, H> ArenaVisitor<T, Storage, H> {
 }
 
 #[cfg(feature = "serde")]
-impl<'de, T: ?Sized, Storage, H> Visitor<'de> for ArenaVisitor<T, Storage, H>
+impl<'de, T: ?Sized, Storage, H, I> Visitor<'de> for ArenaVisitor<T, Storage, H, I>
 where
     T: Eq + Hash,
     Storage: Borrow<T> + Deserialize<'de>,
     H: Default + BuildHasher,
+    I: Index,
 {
-    type Value = Arena<T, Storage, H>;
+    type Value = Arena<T, Storage, H, I>;
 
     fn expecting(&self, formatter: &mut core::fmt::Formatter) -> core::fmt::Result {
         formatter.write_str("a sequence of values")

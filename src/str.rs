@@ -1,4 +1,4 @@
-use crate::CopyRangeU32;
+use crate::{CopyRange, Index};
 #[cfg(any(feature = "serde", not(feature = "sync")))]
 use alloc::string::String;
 #[cfg(any(feature = "serde", not(feature = "sync")))]
@@ -30,153 +30,159 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_cow::CowStr;
 
 /// A handle to an interned value in an [`ArenaStr`].
-pub struct InternedStr<H = DefaultHashBuilder> {
-    id: u32,
+#[cfg_attr(feature = "get-size2", derive(GetSize))]
+pub struct InternedStr<H = DefaultHashBuilder, I = u32> {
+    id: I,
     _phantom: PhantomData<fn() -> H>,
 }
 
-impl<H> Default for InternedStr<H> {
+impl<H, I: Index> Default for InternedStr<H, I> {
     fn default() -> Self {
-        Self::new(u32::MAX)
+        Self::new(I::MAX)
     }
 }
 
-impl<H> Debug for InternedStr<H> {
+impl<H, I: Index> Debug for InternedStr<H, I> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_tuple("I").field(&self.id).finish()
     }
 }
 
-impl<H> Clone for InternedStr<H> {
+impl<H, I: Index> Clone for InternedStr<H, I> {
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<H> Copy for InternedStr<H> {}
+impl<H, I: Index> Copy for InternedStr<H, I> {}
 
-impl<H> PartialEq for InternedStr<H> {
+impl<H, I: Index> PartialEq for InternedStr<H, I> {
     fn eq(&self, other: &Self) -> bool {
         self.id.eq(&other.id)
     }
 }
 
-impl<H> Eq for InternedStr<H> {}
+impl<H, I: Index> Eq for InternedStr<H, I> {}
 
-impl<H> PartialOrd for InternedStr<H> {
+impl<H, I: Index> PartialOrd for InternedStr<H, I> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl<H> Ord for InternedStr<H> {
+impl<H, I: Index> Ord for InternedStr<H, I> {
     fn cmp(&self, other: &Self) -> Ordering {
         self.id.cmp(&other.id)
     }
 }
 
-impl<H> Hash for InternedStr<H> {
-    fn hash<I>(&self, state: &mut I)
+impl<H, I: Index> Hash for InternedStr<H, I> {
+    fn hash<G>(&self, state: &mut G)
     where
-        I: Hasher,
+        G: Hasher,
     {
         self.id.hash(state);
     }
 }
 
-#[cfg(feature = "get-size2")]
-impl<H> GetSize for InternedStr<H> {
-    // There is nothing on the heap, so the default implementation works out of the
-    // box.
-}
-
 #[cfg(feature = "raw")]
-impl<H> InternedStr<H> {
+impl<H, I> InternedStr<H, I> {
     /// Creates an interned value for the given index.
     ///
     /// This is a low-level function. You should instead use the
     /// [`ArenaStr::intern()`] API to intern a value, unless you really know
     /// what you're doing.
-    pub fn from_id(id: u32) -> Self {
+    pub fn from_id(id: I) -> Self {
         Self::new(id)
     }
+}
 
+#[cfg(feature = "raw")]
+impl<H, I: Index> InternedStr<H, I> {
     /// Obtains the underlying interning index.
     ///
     /// This is a low-level function. You should instead use the
     /// [`ArenaStr::lookup()`] and [`ArenaStr::lookup_bytes()`] APIs, unless you
     /// really know what you're doing.
-    pub fn id(&self) -> u32 {
+    pub fn id(&self) -> I {
         self.id
     }
 }
 
-impl<H> InternedStr<H> {
-    pub(crate) fn new(id: u32) -> Self {
+impl<H, I> InternedStr<H, I> {
+    pub(crate) fn new(id: I) -> Self {
         Self {
             id,
             _phantom: PhantomData,
         }
     }
+}
 
-    pub(crate) fn id_(&self) -> u32 {
+impl<H, I: Index> InternedStr<H, I> {
+    pub(crate) fn id_(&self) -> I {
         self.id
     }
 }
 
 #[cfg(feature = "serde")]
-impl<H> Serialize for InternedStr<H> {
+impl<H, I> Serialize for InternedStr<H, I>
+where
+    I: Serialize,
+{
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
-        serializer.serialize_u32(self.id)
+        self.id.serialize(serializer)
     }
 }
 
 #[cfg(feature = "serde")]
-impl<'de, H> Deserialize<'de> for InternedStr<H> {
+impl<'de, H, I> Deserialize<'de> for InternedStr<H, I>
+where
+    I: Deserialize<'de>,
+{
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
-        let id = u32::deserialize(deserializer)?;
+        let id = I::deserialize(deserializer)?;
         Ok(Self::new(id))
     }
 }
 
 #[cfg_attr(feature = "get-size2", derive(GetSize))]
-struct RangeVecStr {
+struct RangeVecStr<I> {
     #[cfg(not(feature = "sync"))]
     vec: String,
     #[cfg(feature = "sync")]
     vec: AppendStr,
     #[cfg(not(feature = "sync"))]
-    ranges: Vec<CopyRangeU32>,
+    ranges: Vec<CopyRange<I>>,
     #[cfg(feature = "sync")]
-    ranges: AppendVec<CopyRangeU32>,
+    ranges: AppendVec<CopyRange<I>>,
 }
 
-impl RangeVecStr {
-    fn lookup_bytes(&self, id: u32) -> &[u8] {
-        let range = self.ranges[id as usize];
-        let range = range.start as usize..range.end as usize;
+impl<I: Index> RangeVecStr<I> {
+    fn lookup_bytes(&self, id: I) -> &[u8] {
+        let range = self.ranges[id.to_usize()];
+        let range = range.start.to_usize()..range.end.to_usize();
         #[cfg(not(feature = "sync"))]
         return &self.vec.as_bytes()[range];
         #[cfg(feature = "sync")]
         return self.vec.get_bytes(range);
     }
 
-    fn lookup_str(&self, id: u32) -> &str {
-        let range = self.ranges[id as usize];
-        let range = range.start as usize..range.end as usize;
+    fn lookup_str(&self, id: I) -> &str {
+        let range = self.ranges[id.to_usize()];
+        let range = range.start.to_usize()..range.end.to_usize();
         &self.vec[range]
     }
 
     fn iter(&self) -> impl ExactSizeIterator<Item = &str> {
         self.ranges
             .iter()
-            .map(|&range| &self.vec[range.start as usize..range.end as usize])
+            .map(|&range| &self.vec[range.start.to_usize()..range.end.to_usize()])
     }
 
     fn iter_bytes(&self) -> impl ExactSizeIterator<Item = &[u8]> {
@@ -184,25 +190,27 @@ impl RangeVecStr {
         let bytes = self.vec.as_bytes();
         self.ranges.iter().map(|&range| {
             #[cfg(not(feature = "sync"))]
-            return &bytes[range.start as usize..range.end as usize];
+            return &bytes[range.start.to_usize()..range.end.to_usize()];
             #[cfg(feature = "sync")]
-            return self.vec.get_bytes(range.start as usize..range.end as usize);
+            return self
+                .vec
+                .get_bytes(range.start.to_usize()..range.end.to_usize());
         })
     }
 
     #[cfg(feature = "sync")]
-    fn push_str(&self, value: &str) -> u32 {
+    fn push_str(&self, value: &str) -> I {
         let range = self.vec.push_str(value);
-        assert!(range.start <= u32::MAX as usize);
-        assert!(range.end <= u32::MAX as usize);
-        let range = range.start as u32..range.end as u32;
+        assert!(range.start <= I::MAX.to_usize());
+        assert!(range.end <= I::MAX.to_usize());
+        let range = I::from_usize(range.start)..I::from_usize(range.end);
 
         let id = self.ranges.push(range.into());
-        assert!(id <= u32::MAX as usize);
-        id as u32
+        assert!(id <= I::MAX.to_usize());
+        I::from_usize(id)
     }
 
-    fn push_str_mut(&mut self, value: &str) -> u32 {
+    fn push_str_mut(&mut self, value: &str) -> I {
         #[cfg(not(feature = "sync"))]
         let range = {
             let start = self.vec.len();
@@ -212,9 +220,9 @@ impl RangeVecStr {
         };
         #[cfg(feature = "sync")]
         let range = self.vec.push_str_mut(value);
-        assert!(range.start <= u32::MAX as usize);
-        assert!(range.end <= u32::MAX as usize);
-        let range = range.start as u32..range.end as u32;
+        assert!(range.start <= I::MAX.to_usize());
+        assert!(range.end <= I::MAX.to_usize());
+        let range = I::from_usize(range.start)..I::from_usize(range.end);
 
         #[cfg(not(feature = "sync"))]
         let id = {
@@ -224,26 +232,27 @@ impl RangeVecStr {
         };
         #[cfg(feature = "sync")]
         let id = self.ranges.push_mut(range.into());
-        assert!(id <= u32::MAX as usize);
-        id as u32
+        assert!(id <= I::MAX.to_usize());
+        I::from_usize(id)
     }
 }
 
 /// Interning arena for strings.
-pub struct ArenaStr<H = DefaultHashBuilder> {
-    rangevec: RangeVecStr,
+pub struct ArenaStr<H = DefaultHashBuilder, I = u32> {
+    rangevec: RangeVecStr<I>,
     #[cfg(not(feature = "sync"))]
-    map: HashTable<u32>,
+    map: HashTable<I>,
     #[cfg(feature = "sync")]
-    map: DashTable<u32>,
+    map: DashTable<I>,
     hasher: H,
     #[cfg(feature = "debug")]
     references: AtomicUsize,
 }
 
-impl<H> Clone for ArenaStr<H>
+impl<H, I> Clone for ArenaStr<H, I>
 where
     H: Default + BuildHasher,
+    I: Index,
 {
     fn clone(&self) -> Self {
         let iter = self.iter_();
@@ -255,7 +264,7 @@ where
     }
 }
 
-impl<H> ArenaStr<H>
+impl<H, I> ArenaStr<H, I>
 where
     H: Default,
 {
@@ -284,7 +293,7 @@ where
     }
 }
 
-impl<H> ArenaStr<H> {
+impl<H, I> ArenaStr<H, I> {
     /// Returns the number of strings in this arena.
     ///
     /// Note that because [`ArenaStr`] is a concurrent data structure, this is
@@ -311,7 +320,9 @@ impl<H> ArenaStr<H> {
     pub fn is_empty(&self) -> bool {
         self.strings() == 0
     }
+}
 
+impl<H, I: Index> ArenaStr<H, I> {
     /// Returns an iterator over all strings in this arena, in indexing order.
     ///
     /// Note that because [`ArenaStr`] is a concurrent data structure, this is
@@ -347,9 +358,10 @@ impl<H> ArenaStr<H> {
     }
 }
 
-impl<H> ArenaStr<H>
+impl<H, I> ArenaStr<H, I>
 where
     H: BuildHasher,
+    I: Index,
 {
     /// Returns the given string's [`InternedStr`] handle if it is already
     /// interned.
@@ -359,7 +371,7 @@ where
     ///
     /// See also [`find_mut()`](Self::find_mut), which is more efficient if you
     /// hold a mutable reference to this arena as it avoids acquiring locks.
-    pub fn find(&self, value: &str) -> Option<InternedStr<H>> {
+    pub fn find(&self, value: &str) -> Option<InternedStr<H, I>> {
         let hash = self.hasher.hash_one(value);
         self.map
             .find(hash, |&i| self.lookup_str(i) == value)
@@ -375,7 +387,7 @@ where
     /// Contrary to [`find()`](Self::find), no locks are held internally because
     /// this function already takes an exclusive mutable reference to this
     /// arena.
-    pub fn find_mut(&mut self, value: &str) -> Option<InternedStr<H>> {
+    pub fn find_mut(&mut self, value: &str) -> Option<InternedStr<H, I>> {
         let hash = self.hasher.hash_one(value);
         #[cfg(not(feature = "sync"))]
         return self
@@ -395,12 +407,12 @@ where
     /// Calling this function multiple times with the same value doesn't violate
     /// safety, but the value will be stored multiple times in the arena.
     #[cfg(feature = "raw")]
-    pub fn push_mut(&mut self, value: &str) -> u32 {
+    pub fn push_mut(&mut self, value: &str) -> I {
         self.push(value)
     }
 }
 
-impl<H> Default for ArenaStr<H>
+impl<H, I> Default for ArenaStr<H, I>
 where
     H: Default,
 {
@@ -427,22 +439,25 @@ where
     }
 }
 
-impl<H> Debug for ArenaStr<H> {
+impl<H, I: Index> Debug for ArenaStr<H, I> {
     fn fmt(&self, fmt: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         fmt.debug_list().entries(self.iter_()).finish()
     }
 }
 
-impl<H> PartialEq for ArenaStr<H> {
+impl<H, I: Index> PartialEq for ArenaStr<H, I> {
     fn eq(&self, other: &Self) -> bool {
         self.iter_bytes_().eq(other.iter_bytes_())
     }
 }
 
-impl<H> Eq for ArenaStr<H> {}
+impl<H, I: Index> Eq for ArenaStr<H, I> {}
 
 #[cfg(feature = "get-size2")]
-impl<H> GetSize for ArenaStr<H> {
+impl<H, I> GetSize for ArenaStr<H, I>
+where
+    I: GetSize,
+{
     fn get_heap_size_with_tracker<Tr: GetSizeTracker>(&self, tracker: Tr) -> (usize, Tr) {
         let (size_vec, tracker) = GetSize::get_heap_size_with_tracker(&self.rangevec, tracker);
         let (size_map, tracker) = GetSize::get_heap_size_with_tracker(&self.map, tracker);
@@ -451,7 +466,7 @@ impl<H> GetSize for ArenaStr<H> {
 }
 
 #[cfg(all(feature = "debug", feature = "std"))]
-impl<H> ArenaStr<H> {
+impl<H, I> ArenaStr<H, I> {
     /// Prints a summary of the storage used by this arena to stdout.
     pub fn print_summary(&self, prefix: &str, title: &str, total_bytes: usize) {
         let strings = self.rangevec.ranges.len();
@@ -472,7 +487,7 @@ impl<H> ArenaStr<H> {
 }
 
 #[cfg(feature = "debug")]
-impl<H> ArenaStr<H> {
+impl<H, I> ArenaStr<H, I> {
     /// Returns the total number of references to strings in this arena.
     ///
     /// The underlying counter is incremented each time a string is interned,
@@ -482,9 +497,10 @@ impl<H> ArenaStr<H> {
     }
 }
 
-impl<H> ArenaStr<H>
+impl<H, I> ArenaStr<H, I>
 where
     H: BuildHasher,
+    I: Index,
 {
     /// Interns the given value in this arena.
     ///
@@ -494,7 +510,7 @@ where
     /// See also [`intern_mut()`](Self::intern_mut), which is more efficient if
     /// you hold a mutable reference to this arena as it avoids acquiring locks.
     #[cfg(feature = "sync")]
-    pub fn intern(&self, value: &str) -> InternedStr<H> {
+    pub fn intern(&self, value: &str) -> InternedStr<H, I> {
         #[cfg(feature = "debug")]
         self.references.fetch_add(1, atomic::Ordering::Relaxed);
 
@@ -519,7 +535,7 @@ where
     /// Contrary to [`intern()`](Self::intern), no locks are held internally
     /// because this function already takes an exclusive mutable reference to
     /// this arena.
-    pub fn intern_mut(&mut self, value: &str) -> InternedStr<H> {
+    pub fn intern_mut(&mut self, value: &str) -> InternedStr<H, I> {
         #[cfg(feature = "debug")]
         {
             *self.references.get_mut() += 1;
@@ -549,7 +565,7 @@ where
     ///
     /// Calling this function multiple times with the same value doesn't violate
     /// safety, but the value will be stored multiple times in the arena.
-    pub(crate) fn push(&mut self, value: &str) -> u32 {
+    pub(crate) fn push(&mut self, value: &str) -> I {
         #[cfg(feature = "debug")]
         {
             *self.references.get_mut() += 1;
@@ -569,7 +585,7 @@ where
     }
 }
 
-impl<H> ArenaStr<H> {
+impl<H, I: Index> ArenaStr<H, I> {
     /// Retrieves the given [`InternedStr`] value from this arena.
     ///
     /// The caller is responsible for ensuring that the same arena was used to
@@ -578,7 +594,7 @@ impl<H> ArenaStr<H> {
     ///
     /// If you only need to access the bytes,
     /// [`lookup_bytes()`](Self::lookup_bytes) may be more efficient.
-    pub fn lookup(&self, interned: InternedStr<H>) -> &str {
+    pub fn lookup(&self, interned: InternedStr<H, I>) -> &str {
         self.lookup_str(interned.id)
     }
 
@@ -587,17 +603,20 @@ impl<H> ArenaStr<H> {
     /// The caller is responsible for ensuring that the same arena was used to
     /// intern this value, otherwise an arbitrary value will be returned or
     /// a panic will happen.
-    pub fn lookup_bytes(&self, interned: InternedStr<H>) -> &[u8] {
+    pub fn lookup_bytes(&self, interned: InternedStr<H, I>) -> &[u8] {
         self.rangevec.lookup_bytes(interned.id)
     }
 
-    fn lookup_str(&self, id: u32) -> &str {
+    fn lookup_str(&self, id: I) -> &str {
         self.rangevec.lookup_str(id)
     }
 }
 
 #[cfg(feature = "serde")]
-impl<H> Serialize for ArenaStr<H> {
+impl<H, I> Serialize for ArenaStr<H, I>
+where
+    I: Index + Serialize,
+{
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -606,8 +625,8 @@ impl<H> Serialize for ArenaStr<H> {
 
         let ranges = RangeWrapper {
             ranges: &self.rangevec.ranges,
-            ranges_len: Cell::new(0),
-            total_len: Cell::new(0),
+            ranges_len: Cell::new(I::ZERO),
+            total_len: Cell::new(I::ZERO),
         };
         tuple.serialize_element(&ranges)?;
 
@@ -622,25 +641,28 @@ impl<H> Serialize for ArenaStr<H> {
 }
 
 #[cfg(feature = "serde")]
-struct RangeWrapper<'a> {
+struct RangeWrapper<'a, I> {
     #[cfg(not(feature = "sync"))]
-    ranges: &'a [CopyRangeU32],
+    ranges: &'a [CopyRange<I>],
     #[cfg(feature = "sync")]
-    ranges: &'a AppendVec<CopyRangeU32>,
-    ranges_len: Cell<u32>,
-    total_len: Cell<u32>,
+    ranges: &'a AppendVec<CopyRange<I>>,
+    ranges_len: Cell<I>,
+    total_len: Cell<I>,
 }
 
 #[cfg(feature = "serde")]
-impl<'a> Serialize for RangeWrapper<'a> {
+impl<'a, I> Serialize for RangeWrapper<'a, I>
+where
+    I: Index + Serialize,
+{
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
-        let mut ranges_len: u32 = 0;
-        let mut total_len: u32 = 0;
+        let mut ranges_len = I::ZERO;
+        let mut total_len = I::ZERO;
         let result = serializer.collect_seq(self.ranges.iter().map(|range| {
-            ranges_len += 1;
+            ranges_len.incr();
             let this_len = range.end - range.start;
             total_len = total_len.strict_add(this_len);
             this_len
@@ -654,22 +676,25 @@ impl<'a> Serialize for RangeWrapper<'a> {
 }
 
 #[cfg(feature = "serde")]
-struct ArenaStrWrapper<'a> {
-    ranges_len: u32,
-    total_len: u32,
-    rangevec: &'a RangeVecStr,
+struct ArenaStrWrapper<'a, I> {
+    ranges_len: I,
+    total_len: I,
+    rangevec: &'a RangeVecStr<I>,
 }
 
 #[cfg(feature = "serde")]
-impl<'a> Serialize for ArenaStrWrapper<'a> {
+impl<'a, I> Serialize for ArenaStrWrapper<'a, I>
+where
+    I: Index,
+{
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
         // TODO: Make this zero-copy?
-        let mut string = String::with_capacity(self.total_len as usize);
-        for range in self.rangevec.ranges.iter().take(self.ranges_len as usize) {
-            let s = &self.rangevec.vec[range.start as usize..range.end as usize];
+        let mut string = String::with_capacity(self.total_len.to_usize());
+        for range in self.rangevec.ranges.iter().take(self.ranges_len.to_usize()) {
+            let s = &self.rangevec.vec[range.start.to_usize()..range.end.to_usize()];
             string.push_str(s);
         }
 
@@ -678,9 +703,10 @@ impl<'a> Serialize for ArenaStrWrapper<'a> {
 }
 
 #[cfg(feature = "serde")]
-impl<'de, H> Deserialize<'de> for ArenaStr<H>
+impl<'de, H, I> Deserialize<'de> for ArenaStr<H, I>
 where
     H: Default + BuildHasher,
+    I: Index + Deserialize<'de>,
 {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -691,12 +717,12 @@ where
 }
 
 #[cfg(feature = "serde")]
-struct ArenaStrVisitor<H> {
-    _phantom: PhantomData<fn() -> ArenaStr<H>>,
+struct ArenaStrVisitor<H, I> {
+    _phantom: PhantomData<fn() -> ArenaStr<H, I>>,
 }
 
 #[cfg(feature = "serde")]
-impl<H> ArenaStrVisitor<H> {
+impl<H, I> ArenaStrVisitor<H, I> {
     fn new() -> Self {
         Self {
             _phantom: PhantomData,
@@ -705,11 +731,12 @@ impl<H> ArenaStrVisitor<H> {
 }
 
 #[cfg(feature = "serde")]
-impl<'de, H> Visitor<'de> for ArenaStrVisitor<H>
+impl<'de, H, I> Visitor<'de> for ArenaStrVisitor<H, I>
 where
     H: Default + BuildHasher,
+    I: Index + Deserialize<'de>,
 {
-    type Value = ArenaStr<H>;
+    type Value = ArenaStr<H, I>;
 
     fn expecting(&self, formatter: &mut core::fmt::Formatter) -> core::fmt::Result {
         formatter.write_str("a pair of values")
@@ -719,7 +746,7 @@ where
     where
         A: SeqAccess<'de>,
     {
-        let sizes: Vec<u32> = seq
+        let sizes: Vec<I> = seq
             .next_element()?
             .ok_or_else(|| A::Error::invalid_length(0, &self))?;
         let string: CowStr = seq
@@ -730,7 +757,7 @@ where
 
         let mut start = 0;
         for size in sizes {
-            let size = size as usize;
+            let size = size.to_usize();
             arena.push(&string.0[start..start + size]);
             start += size;
         }
@@ -748,8 +775,9 @@ mod delta {
     use serde::ser::SerializeSeq;
     use serde_cow::CowBytes;
 
-    impl<H, Accum> Serialize for DeltaEncoding<&ArenaStr<H>, Accum>
+    impl<H, I, Accum> Serialize for DeltaEncoding<&ArenaStr<H, I>, Accum>
     where
+        I: Index + Serialize,
         Accum: Accumulator<Value = str, Storage = Box<str>, DeltaStorage = Box<[u8]>>,
     {
         fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
@@ -760,8 +788,8 @@ mod delta {
 
             let ranges = RangeWrapper {
                 ranges: &self.rangevec.ranges,
-                ranges_len: Cell::new(0),
-                total_len: Cell::new(0),
+                ranges_len: Cell::new(I::ZERO),
+                total_len: Cell::new(I::ZERO),
             };
             tuple.serialize_element(&ranges)?;
 
@@ -775,25 +803,26 @@ mod delta {
         }
     }
 
-    struct ArenaStrWrapper<'a, Accum> {
-        ranges_len: u32,
-        total_len: u32,
-        rangevec: &'a DeltaEncoding<&'a RangeVecStr, Accum>,
+    struct ArenaStrWrapper<'a, I, Accum> {
+        ranges_len: I,
+        total_len: I,
+        rangevec: &'a DeltaEncoding<&'a RangeVecStr<I>, Accum>,
     }
 
-    impl<'a, Accum> Serialize for ArenaStrWrapper<'a, Accum>
+    impl<'a, I, Accum> Serialize for ArenaStrWrapper<'a, I, Accum>
     where
+        I: Index,
         Accum: Accumulator<Value = str, Storage = Box<str>, DeltaStorage = Box<[u8]>>,
     {
         fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
         where
             S: Serializer,
         {
-            let mut seq = serializer.serialize_seq(Some(self.total_len as usize))?;
+            let mut seq = serializer.serialize_seq(Some(self.total_len.to_usize()))?;
 
             let mut acc = Accum::default();
-            for range in self.rangevec.ranges.iter().take(self.ranges_len as usize) {
-                let slice = &self.rangevec.vec[range.start as usize..range.end as usize];
+            for range in self.rangevec.ranges.iter().take(self.ranges_len.to_usize()) {
+                let slice = &self.rangevec.vec[range.start.to_usize()..range.end.to_usize()];
                 let delta = acc.fold(slice);
                 assert_eq!(
                     delta.len(),
@@ -809,9 +838,10 @@ mod delta {
         }
     }
 
-    impl<'de, H, Accum> Deserialize<'de> for DeltaEncoding<ArenaStr<H>, Accum>
+    impl<'de, H, I, Accum> Deserialize<'de> for DeltaEncoding<ArenaStr<H, I>, Accum>
     where
         H: Default + BuildHasher,
+        I: Index + Deserialize<'de>,
         Accum: Accumulator<Value = str, Storage = Box<str>, Delta = [u8]>,
     {
         fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
@@ -822,12 +852,12 @@ mod delta {
         }
     }
 
-    struct DeltaArenaStrVisitor<H, Accum> {
-        _phantom: PhantomData<fn() -> ArenaStr<H>>,
+    struct DeltaArenaStrVisitor<H, I, Accum> {
+        _phantom: PhantomData<fn() -> ArenaStr<H, I>>,
         _accum: PhantomData<Accum>,
     }
 
-    impl<H, Accum> DeltaArenaStrVisitor<H, Accum> {
+    impl<H, I, Accum> DeltaArenaStrVisitor<H, I, Accum> {
         fn new() -> Self {
             Self {
                 _phantom: PhantomData,
@@ -836,12 +866,13 @@ mod delta {
         }
     }
 
-    impl<'de, H, Accum> Visitor<'de> for DeltaArenaStrVisitor<H, Accum>
+    impl<'de, H, I, Accum> Visitor<'de> for DeltaArenaStrVisitor<H, I, Accum>
     where
         H: Default + BuildHasher,
+        I: Index + Deserialize<'de>,
         Accum: Accumulator<Value = str, Storage = Box<str>, Delta = [u8]>,
     {
-        type Value = DeltaEncoding<ArenaStr<H>, Accum>;
+        type Value = DeltaEncoding<ArenaStr<H, I>, Accum>;
 
         fn expecting(&self, formatter: &mut core::fmt::Formatter) -> core::fmt::Result {
             formatter.write_str("a pair of values")
@@ -851,7 +882,7 @@ mod delta {
         where
             A: SeqAccess<'de>,
         {
-            let sizes: Vec<u32> = seq
+            let sizes: Vec<I> = seq
                 .next_element()?
                 .ok_or_else(|| A::Error::invalid_length(0, &self))?;
             let bytes: CowBytes = seq
@@ -863,7 +894,7 @@ mod delta {
             let mut acc = Accum::default();
             let mut start = 0;
             for size in sizes {
-                let size = size as usize;
+                let size = size.to_usize();
                 let delta = &bytes.0[start..start + size];
                 let string = acc.unfold(delta);
                 assert_eq!(
