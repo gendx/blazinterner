@@ -50,6 +50,8 @@ use appendvec::AppendVec;
 use core::borrow::Borrow;
 use core::cmp::Ordering;
 use core::fmt::Debug;
+#[cfg(feature = "std")]
+use core::hash::BuildHasherDefault;
 use core::hash::{BuildHasher, Hash, Hasher};
 use core::marker::PhantomData;
 #[cfg(feature = "debug")]
@@ -60,7 +62,6 @@ use dashtable::DashTable;
 pub use delta::{Accumulator, DeltaEncoding};
 #[cfg(feature = "get-size2")]
 use get_size2::{GetSize, GetSizeTracker};
-use hashbrown::DefaultHashBuilder;
 #[cfg(not(feature = "sync"))]
 use hashbrown::HashTable;
 pub use index::{Index, U24, U40, U48, U56};
@@ -73,7 +74,30 @@ use serde::de::{SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use slice::CopyRange;
 pub use slice::{ArenaSlice, InternedSlice};
+#[cfg(feature = "std")]
+use std::hash::DefaultHasher;
 pub use str::{ArenaStr, InternedStr};
+
+/// The default [`BuildHasher`] from the `hashbrown` crate.
+pub type HashbrownBuildHasher = hashbrown::DefaultHashBuilder;
+
+/// The default [`BuildHasher`] from the standard library.
+#[cfg(feature = "std")]
+pub type StdBuildHasher = BuildHasherDefault<DefaultHasher>;
+
+/// The default [`BuildHasher`] used in this crate.
+///
+/// When the `std` feature is enabled, this is the standard library default
+/// hasher, otherwise this is the `hashbrown` crate's default hasher.
+#[cfg(not(feature = "std"))]
+pub type DefaultBuildHasher = HashbrownBuildHasher;
+
+/// The default [`BuildHasher`] used in this crate.
+///
+/// When the `std` feature is enabled, this is the standard library default
+/// hasher, otherwise this is the `hashbrown` crate's default hasher.
+#[cfg(feature = "std")]
+pub type DefaultBuildHasher = StdBuildHasher;
 
 /// A handle to an interned value in an [`Arena`].
 ///
@@ -83,7 +107,7 @@ pub use str::{ArenaStr, InternedStr};
 /// [`str`](prim@str), you need to specify a [`Sized`] storage type, such as
 /// `Box<T>`.
 #[cfg_attr(feature = "get-size2", derive(GetSize))]
-pub struct Interned<T: ?Sized, Storage = T, H = DefaultHashBuilder, I = u32> {
+pub struct Interned<T: ?Sized, Storage = T, H = DefaultBuildHasher, I = u32> {
     id: I,
     #[expect(clippy::type_complexity)]
     _phantom: PhantomData<fn() -> (*const T, *const Storage, H)>,
@@ -211,7 +235,7 @@ where
 /// overhead. For non-[`Sized`] values such as [`dyn
 /// Trait`](https://doc.rust-lang.org/stable/std/keyword.dyn.html), you need to
 /// specify a [`Sized`] storage type, such as `Box<dyn Trait>`.
-pub struct Arena<T: ?Sized, Storage = T, H = DefaultHashBuilder, I = u32> {
+pub struct Arena<T: ?Sized, Storage = T, H = DefaultBuildHasher, I = u32> {
     #[cfg(not(feature = "sync"))]
     vec: Vec<Storage>,
     #[cfg(feature = "sync")]

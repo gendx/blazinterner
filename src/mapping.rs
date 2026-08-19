@@ -1,4 +1,6 @@
 use super::{Arena, ArenaSlice, ArenaStr, Index, Interned, InternedSlice, InternedStr};
+#[cfg(feature = "retain")]
+use crate::DefaultBuildHasher;
 use alloc::boxed::Box;
 use alloc::vec;
 use alloc::vec::Vec;
@@ -10,8 +12,6 @@ use core::hash::{BuildHasher, Hash};
 #[cfg(feature = "retain")]
 use core::marker::PhantomData;
 use either::Either;
-#[cfg(feature = "retain")]
-use hashbrown::DefaultHashBuilder;
 
 impl<T: ?Sized, Storage, H, I> Arena<T, Storage, H, I>
 where
@@ -155,7 +155,7 @@ where
 /// This struct is created by the [`retain_builder()`](Arena::retain_builder)
 /// method on [`Arena`].
 #[cfg(feature = "retain")]
-pub struct RetainBuilder<T: ?Sized, Storage = T, H = DefaultHashBuilder, I = u32> {
+pub struct RetainBuilder<T: ?Sized, Storage = T, H = DefaultBuildHasher, I = u32> {
     len: usize,
     retained: BitSet,
     _phantom: PhantomData<Interned<T, Storage, H, I>>,
@@ -324,7 +324,7 @@ where
 /// This struct is created by the
 /// [`retain_builder()`](ArenaSlice::retain_builder) method on [`ArenaSlice`].
 #[cfg(feature = "retain")]
-pub struct RetainSliceBuilder<T, H = DefaultHashBuilder, I = u32> {
+pub struct RetainSliceBuilder<T, H = DefaultBuildHasher, I = u32> {
     len: usize,
     retained: BitSet,
     _phantom: PhantomData<InternedSlice<T, H, I>>,
@@ -449,7 +449,7 @@ where
 /// This struct is created by the [`retain_builder()`](ArenaStr::retain_builder)
 /// method on [`ArenaStr`].
 #[cfg(feature = "retain")]
-pub struct RetainStrBuilder<H = DefaultHashBuilder, I = u32> {
+pub struct RetainStrBuilder<H = DefaultBuildHasher, I = u32> {
     len: usize,
     retained: BitSet,
     _phantom: PhantomData<InternedStr<H, I>>,
@@ -807,9 +807,9 @@ impl<I: Index> MappingImpl<I> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use hashbrown::DefaultHashBuilder;
+    use crate::DefaultBuildHasher;
 
-    type InternedU32 = Interned<u32, u32, DefaultHashBuilder, u32>;
+    type InternedU32 = Interned<u32, u32, DefaultBuildHasher, u32>;
 
     #[test]
     fn arena_str_sort() {

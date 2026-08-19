@@ -1,4 +1,4 @@
-use crate::Index;
+use crate::{DefaultBuildHasher, Index};
 use alloc::vec::Vec;
 #[cfg(feature = "sync")]
 use appendvec::AppendVec;
@@ -16,7 +16,6 @@ use core::sync::atomic::{self, AtomicUsize};
 use dashtable::DashTable;
 #[cfg(feature = "get-size2")]
 use get_size2::{GetSize, GetSizeTracker};
-use hashbrown::DefaultHashBuilder;
 #[cfg(not(feature = "sync"))]
 use hashbrown::HashTable;
 #[cfg(feature = "serde")]
@@ -77,7 +76,7 @@ where
 
 /// A handle to an interned value in an [`ArenaSlice`].
 #[cfg_attr(feature = "get-size2", derive(GetSize))]
-pub struct InternedSlice<T, H = DefaultHashBuilder, I = u32> {
+pub struct InternedSlice<T, H = DefaultBuildHasher, I = u32> {
     id: I,
     _phantom: PhantomData<fn() -> (*const T, H)>,
 }
@@ -251,7 +250,7 @@ impl<T, I: Index> RangeVec<T, I> {
 }
 
 /// Interning arena for slices of type `T`.
-pub struct ArenaSlice<T, H = DefaultHashBuilder, I = u32> {
+pub struct ArenaSlice<T, H = DefaultBuildHasher, I = u32> {
     rangevec: RangeVec<T, I>,
     #[cfg(not(feature = "sync"))]
     map: HashTable<I>,

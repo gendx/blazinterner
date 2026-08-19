@@ -1,4 +1,4 @@
-use crate::{CopyRange, Index};
+use crate::{CopyRange, DefaultBuildHasher, Index};
 #[cfg(any(feature = "serde", not(feature = "sync")))]
 use alloc::string::String;
 #[cfg(any(feature = "serde", not(feature = "sync")))]
@@ -17,7 +17,6 @@ use core::sync::atomic::{self, AtomicUsize};
 use dashtable::DashTable;
 #[cfg(feature = "get-size2")]
 use get_size2::{GetSize, GetSizeTracker};
-use hashbrown::DefaultHashBuilder;
 #[cfg(not(feature = "sync"))]
 use hashbrown::HashTable;
 #[cfg(feature = "serde")]
@@ -31,7 +30,7 @@ use serde_cow::CowStr;
 
 /// A handle to an interned value in an [`ArenaStr`].
 #[cfg_attr(feature = "get-size2", derive(GetSize))]
-pub struct InternedStr<H = DefaultHashBuilder, I = u32> {
+pub struct InternedStr<H = DefaultBuildHasher, I = u32> {
     id: I,
     _phantom: PhantomData<fn() -> H>,
 }
@@ -238,7 +237,7 @@ impl<I: Index> RangeVecStr<I> {
 }
 
 /// Interning arena for strings.
-pub struct ArenaStr<H = DefaultHashBuilder, I = u32> {
+pub struct ArenaStr<H = DefaultBuildHasher, I = u32> {
     rangevec: RangeVecStr<I>,
     #[cfg(not(feature = "sync"))]
     map: HashTable<I>,
