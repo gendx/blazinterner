@@ -50,8 +50,6 @@ use appendvec::AppendVec;
 use core::borrow::Borrow;
 use core::cmp::Ordering;
 use core::fmt::Debug;
-#[cfg(feature = "std")]
-use core::hash::BuildHasherDefault;
 use core::hash::{BuildHasher, Hash, Hasher};
 use core::marker::PhantomData;
 #[cfg(feature = "debug")]
@@ -75,7 +73,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use slice::CopyRange;
 pub use slice::{ArenaSlice, InternedSlice};
 #[cfg(feature = "std")]
-use std::hash::DefaultHasher;
+use std::hash::RandomState;
 pub use str::{ArenaStr, InternedStr};
 
 /// The default [`BuildHasher`] from the `hashbrown` crate.
@@ -83,7 +81,7 @@ pub type HashbrownBuildHasher = hashbrown::DefaultHashBuilder;
 
 /// The default [`BuildHasher`] from the standard library.
 #[cfg(feature = "std")]
-pub type StdBuildHasher = BuildHasherDefault<DefaultHasher>;
+pub type StdBuildHasher = RandomState;
 
 /// The default [`BuildHasher`] used in this crate.
 ///
@@ -735,6 +733,98 @@ mod test {
     use std::borrow::Cow;
     #[cfg(feature = "sync")]
     use std::thread;
+
+    #[test]
+    fn test_default_build_hasher() {
+        let build_hasher = DefaultBuildHasher::default();
+
+        for i in 0..42 {
+            let hash1 = build_hasher.hash_one(i);
+            let hash2 = build_hasher.hash_one(i);
+            assert_eq!(hash1, hash2);
+        }
+
+        let hash1 = build_hasher.hash_one("Hello world");
+        let hash2 = build_hasher.hash_one("Hello world");
+        assert_eq!(hash1, hash2);
+    }
+
+    #[test]
+    fn test_hashbrown_build_hasher() {
+        let build_hasher = HashbrownBuildHasher::default();
+
+        for i in 0..42 {
+            let hash1 = build_hasher.hash_one(i);
+            let hash2 = build_hasher.hash_one(i);
+            assert_eq!(hash1, hash2);
+        }
+
+        let hash1 = build_hasher.hash_one("Hello world");
+        let hash2 = build_hasher.hash_one("Hello world");
+        assert_eq!(hash1, hash2);
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn test_std_build_hasher() {
+        let build_hasher = StdBuildHasher::default();
+
+        for i in 0..42 {
+            let hash1 = build_hasher.hash_one(i);
+            let hash2 = build_hasher.hash_one(i);
+            assert_eq!(hash1, hash2);
+        }
+
+        let hash1 = build_hasher.hash_one("Hello world");
+        let hash2 = build_hasher.hash_one("Hello world");
+        assert_eq!(hash1, hash2);
+    }
+
+    #[test]
+    fn test_default_build_hasher_is_randomized() {
+        let build_hasher1 = DefaultBuildHasher::default();
+        let build_hasher2 = DefaultBuildHasher::default();
+
+        for i in 0..42 {
+            let hash1 = build_hasher1.hash_one(i);
+            let hash2 = build_hasher2.hash_one(i);
+            if hash1 != hash2 {
+                return;
+            }
+        }
+        panic!("All hashes match");
+    }
+
+    #[test]
+    fn test_hashbrown_build_hasher_is_randomized() {
+        let build_hasher1 = HashbrownBuildHasher::default();
+        let build_hasher2 = HashbrownBuildHasher::default();
+
+        for i in 0..42 {
+            let hash1 = build_hasher1.hash_one(i);
+            let hash2 = build_hasher2.hash_one(i);
+            if hash1 != hash2 {
+                return;
+            }
+        }
+        panic!("All hashes match");
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn test_std_build_hasher_is_randomized() {
+        let build_hasher1 = StdBuildHasher::default();
+        let build_hasher2 = StdBuildHasher::default();
+
+        for i in 0..42 {
+            let hash1 = build_hasher1.hash_one(i);
+            let hash2 = build_hasher2.hash_one(i);
+            if hash1 != hash2 {
+                return;
+            }
+        }
+        panic!("All hashes match");
+    }
 
     #[cfg(feature = "sync")]
     #[test]
