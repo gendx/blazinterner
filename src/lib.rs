@@ -295,8 +295,8 @@ impl<T: ?Sized, Storage, H, I> Arena<T, Storage, H, I> {
     /// Returns the number of values in this arena.
     ///
     /// Note that because [`Arena`] is a concurrent data structure, this is only
-    /// a snapshot as viewed by this thread, and the result may change if
-    /// other threads are inserting values.
+    /// a snapshot as viewed by this thread, and the result may change if other
+    /// threads are inserting values.
     pub fn len(&self) -> usize {
         self.vec.len()
     }
@@ -304,8 +304,8 @@ impl<T: ?Sized, Storage, H, I> Arena<T, Storage, H, I> {
     /// Checks if this arena is empty.
     ///
     /// Note that because [`Arena`] is a concurrent data structure, this is only
-    /// a snapshot as viewed by this thread, and the result may change if
-    /// other threads are inserting values.
+    /// a snapshot as viewed by this thread, and the result may change if other
+    /// threads are inserting values.
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }

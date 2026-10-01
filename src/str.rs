@@ -296,8 +296,8 @@ impl<H, I> ArenaStr<H, I> {
     /// Returns the number of strings in this arena.
     ///
     /// Note that because [`ArenaStr`] is a concurrent data structure, this is
-    /// only a snapshot as viewed by this thread, and the result may change
-    /// if other threads are inserting values.
+    /// only a snapshot as viewed by this thread, and the result may change if
+    /// other threads are inserting values.
     pub fn strings(&self) -> usize {
         self.rangevec.ranges.len()
     }
@@ -305,8 +305,8 @@ impl<H, I> ArenaStr<H, I> {
     /// Returns the total number of bytes in this arena.
     ///
     /// Note that because [`ArenaStr`] is a concurrent data structure, this is
-    /// only a snapshot as viewed by this thread, and the result may change
-    /// if other threads are inserting values.
+    /// only a snapshot as viewed by this thread, and the result may change if
+    /// other threads are inserting values.
     pub fn bytes(&self) -> usize {
         self.rangevec.vec.len()
     }
@@ -314,8 +314,8 @@ impl<H, I> ArenaStr<H, I> {
     /// Checks if this arena is empty.
     ///
     /// Note that because [`ArenaStr`] is a concurrent data structure, this is
-    /// only a snapshot as viewed by this thread, and the result may change
-    /// if other threads are inserting values.
+    /// only a snapshot as viewed by this thread, and the result may change if
+    /// other threads are inserting values.
     pub fn is_empty(&self) -> bool {
         self.strings() == 0
     }

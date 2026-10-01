@@ -310,8 +310,8 @@ impl<T, H, I> ArenaSlice<T, H, I> {
     /// Returns the number of slices in this arena.
     ///
     /// Note that because [`ArenaSlice`] is a concurrent data structure, this is
-    /// only a snapshot as viewed by this thread, and the result may change
-    /// if other threads are inserting values.
+    /// only a snapshot as viewed by this thread, and the result may change if
+    /// other threads are inserting values.
     pub fn slices(&self) -> usize {
         self.rangevec.ranges.len()
     }
@@ -319,8 +319,8 @@ impl<T, H, I> ArenaSlice<T, H, I> {
     /// Returns the total number of items of type `T` in this arena.
     ///
     /// Note that because [`ArenaSlice`] is a concurrent data structure, this is
-    /// only a snapshot as viewed by this thread, and the result may change
-    /// if other threads are inserting values.
+    /// only a snapshot as viewed by this thread, and the result may change if
+    /// other threads are inserting values.
     pub fn items(&self) -> usize {
         self.rangevec.vec.len()
     }
@@ -328,8 +328,8 @@ impl<T, H, I> ArenaSlice<T, H, I> {
     /// Checks if this arena is empty.
     ///
     /// Note that because [`ArenaSlice`] is a concurrent data structure, this is
-    /// only a snapshot as viewed by this thread, and the result may change
-    /// if other threads are inserting values.
+    /// only a snapshot as viewed by this thread, and the result may change if
+    /// other threads are inserting values.
     pub fn is_empty(&self) -> bool {
         self.slices() == 0
     }
@@ -733,7 +733,8 @@ where
                 |&i| self.hash_slice(self.lookup_slice(i)),
             )
             .or_insert_with(|| {
-                // SAFETY: The caller ensures that the iterator length is correct.
+                // SAFETY: The caller ensures that the iterator length is
+                // correct.
                 let range = unsafe { self.rangevec.vec.push_contiguous(value) };
                 self.rangevec.push_range(range)
             })
@@ -795,7 +796,8 @@ where
                     let end = self.rangevec.vec.len();
                     start..end
                 };
-                // SAFETY: The caller ensures that the iterator length is correct.
+                // SAFETY: The caller ensures that the iterator length is
+                // correct.
                 #[cfg(feature = "sync")]
                 let range = unsafe { self.rangevec.vec.push_contiguous_mut(value) };
                 self.rangevec.push_range_mut(range)

@@ -311,8 +311,8 @@ where
         for i in mapping.iter() {
             let slice = self.lookup(InternedSlice::new(i));
             let iter = slice.iter().map(&f);
-            // SAFETY: The iterator length is trusted, as it's a simple mapping on a slice
-            // iterator.
+            // SAFETY: The iterator length is trusted, as it's a simple mapping
+            // on a slice iterator.
             unsafe { arena.push_iter_mut_(iter) };
         }
         arena
