@@ -75,7 +75,6 @@ where
 }
 
 /// A handle to an interned value in an [`ArenaSlice`].
-#[cfg_attr(feature = "get-size2", derive(GetSize))]
 pub struct InternedSlice<T, H = DefaultBuildHasher, I = u32> {
     id: I,
     _phantom: PhantomData<fn() -> (*const T, H)>,
@@ -127,6 +126,32 @@ impl<T, H, I: Index> Hash for InternedSlice<T, H, I> {
         G: Hasher,
     {
         self.id.hash(state);
+    }
+}
+
+#[cfg(feature = "get-size2")]
+impl<T, H, I> GetSize for InternedSlice<T, H, I>
+where
+    I: GetSize,
+{
+    fn get_stack_size() -> usize {
+        I::get_stack_size()
+    }
+
+    fn get_heap_size(&self) -> usize {
+        self.id.get_heap_size()
+    }
+
+    fn get_heap_size_with_tracker<Tr: GetSizeTracker>(&self, tracker: Tr) -> (usize, Tr) {
+        self.id.get_heap_size_with_tracker(tracker)
+    }
+
+    fn get_size(&self) -> usize {
+        self.id.get_size()
+    }
+
+    fn get_size_with_tracker<Tr: GetSizeTracker>(&self, tracker: Tr) -> (usize, Tr) {
+        self.id.get_size_with_tracker(tracker)
     }
 }
 

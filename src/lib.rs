@@ -104,7 +104,6 @@ pub type DefaultBuildHasher = StdBuildHasher;
 /// good default that incurs no overhead. For non-[`Sized`] values such as
 /// [`str`](prim@str), you need to specify a [`Sized`] storage type, such as
 /// `Box<T>`.
-#[cfg_attr(feature = "get-size2", derive(GetSize))]
 pub struct Interned<T: ?Sized, Storage = T, H = DefaultBuildHasher, I = u32> {
     id: I,
     #[expect(clippy::type_complexity)]
@@ -157,6 +156,32 @@ impl<T: ?Sized, Storage, H, I: Index> Hash for Interned<T, Storage, H, I> {
         G: Hasher,
     {
         self.id.hash(state);
+    }
+}
+
+#[cfg(feature = "get-size2")]
+impl<T: ?Sized, Storage, H, I> GetSize for Interned<T, Storage, H, I>
+where
+    I: GetSize,
+{
+    fn get_stack_size() -> usize {
+        I::get_stack_size()
+    }
+
+    fn get_heap_size(&self) -> usize {
+        self.id.get_heap_size()
+    }
+
+    fn get_heap_size_with_tracker<Tr: GetSizeTracker>(&self, tracker: Tr) -> (usize, Tr) {
+        self.id.get_heap_size_with_tracker(tracker)
+    }
+
+    fn get_size(&self) -> usize {
+        self.id.get_size()
+    }
+
+    fn get_size_with_tracker<Tr: GetSizeTracker>(&self, tracker: Tr) -> (usize, Tr) {
+        self.id.get_size_with_tracker(tracker)
     }
 }
 
