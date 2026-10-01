@@ -104,24 +104,8 @@ impl<T, Accum> GetSize for DeltaEncoding<T, Accum>
 where
     T: GetSize,
 {
-    fn get_stack_size() -> usize {
-        T::get_stack_size()
-    }
-
-    fn get_heap_size(&self) -> usize {
-        self.inner.get_heap_size()
-    }
-
     fn get_heap_size_with_tracker<Tr: GetSizeTracker>(&self, tracker: Tr) -> (usize, Tr) {
         self.inner.get_heap_size_with_tracker(tracker)
-    }
-
-    fn get_size(&self) -> usize {
-        self.inner.get_size()
-    }
-
-    fn get_size_with_tracker<Tr: GetSizeTracker>(&self, tracker: Tr) -> (usize, Tr) {
-        self.inner.get_size_with_tracker(tracker)
     }
 }
 

@@ -88,24 +88,8 @@ impl<H, I> GetSize for InternedStr<H, I>
 where
     I: GetSize,
 {
-    fn get_stack_size() -> usize {
-        I::get_stack_size()
-    }
-
-    fn get_heap_size(&self) -> usize {
-        self.id.get_heap_size()
-    }
-
     fn get_heap_size_with_tracker<Tr: GetSizeTracker>(&self, tracker: Tr) -> (usize, Tr) {
         self.id.get_heap_size_with_tracker(tracker)
-    }
-
-    fn get_size(&self) -> usize {
-        self.id.get_size()
-    }
-
-    fn get_size_with_tracker<Tr: GetSizeTracker>(&self, tracker: Tr) -> (usize, Tr) {
-        self.id.get_size_with_tracker(tracker)
     }
 }
 
