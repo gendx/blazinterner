@@ -8,8 +8,9 @@ jobs:
       MIRIFLAGS: "-Zmiri-num-cpus=4"
     steps:
       - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@nightly
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: nightly-2026-09-09
           components: miri
 
       - name: Run miri tests (no default features)
