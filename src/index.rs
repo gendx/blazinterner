@@ -172,6 +172,34 @@ macro_rules! impl_index {
     };
 }
 
+/// A 16-bit index (2 bytes). Contrary to [`u16`], this type has an alignment of
+/// 1.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct U16([u8; 2]);
+
+impl U16 {
+    #[cfg(feature = "serde")]
+    const EXPECTED: &str = "a 16-bit integer";
+
+    #[inline(always)]
+    fn from_uint(x: u16) -> Self {
+        Self(x.to_ne_bytes())
+    }
+
+    #[cfg(feature = "serde")]
+    #[inline(always)]
+    fn try_from_uint(x: u16) -> Option<Self> {
+        Some(Self(x.to_ne_bytes()))
+    }
+
+    #[inline(always)]
+    fn to_uint(self) -> u16 {
+        u16::from_ne_bytes(self.0)
+    }
+}
+
+impl_index!(U16, u16, 2);
+
 /// A 24-bit index (3 bytes).
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct U24([u8; 3]);
@@ -211,6 +239,34 @@ impl U24 {
 }
 
 impl_index!(U24, u32, 3);
+
+/// A 32-bit index (4 bytes). Contrary to [`u32`], this type has an alignment of
+/// 1.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct U32([u8; 4]);
+
+impl U32 {
+    #[cfg(feature = "serde")]
+    const EXPECTED: &str = "a 32-bit integer";
+
+    #[inline(always)]
+    fn from_uint(x: u32) -> Self {
+        Self(x.to_ne_bytes())
+    }
+
+    #[cfg(feature = "serde")]
+    #[inline(always)]
+    fn try_from_uint(x: u32) -> Option<Self> {
+        Some(Self(x.to_ne_bytes()))
+    }
+
+    #[inline(always)]
+    fn to_uint(self) -> u32 {
+        u32::from_ne_bytes(self.0)
+    }
+}
+
+impl_index!(U32, u32, 4);
 
 /// A 40-bit index (5 bytes).
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -331,3 +387,48 @@ impl U56 {
 }
 
 impl_index!(U56, u64, 7);
+
+/// A 64-bit index (8 bytes). Contrary to [`u64`], this type has an alignment of
+/// 1.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct U64([u8; 8]);
+
+impl U64 {
+    #[cfg(feature = "serde")]
+    const EXPECTED: &str = "a 64-bit integer";
+
+    #[inline(always)]
+    fn from_uint(x: u64) -> Self {
+        Self(x.to_ne_bytes())
+    }
+
+    #[cfg(feature = "serde")]
+    #[inline(always)]
+    fn try_from_uint(x: u64) -> Option<Self> {
+        Some(Self(x.to_ne_bytes()))
+    }
+
+    #[inline(always)]
+    fn to_uint(self) -> u64 {
+        u64::from_ne_bytes(self.0)
+    }
+}
+
+impl_index!(U64, u64, 8);
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_alignment() {
+        assert_eq!(core::mem::align_of::<u8>(), 1);
+        assert_eq!(core::mem::align_of::<U16>(), 1);
+        assert_eq!(core::mem::align_of::<U24>(), 1);
+        assert_eq!(core::mem::align_of::<U32>(), 1);
+        assert_eq!(core::mem::align_of::<U40>(), 1);
+        assert_eq!(core::mem::align_of::<U48>(), 1);
+        assert_eq!(core::mem::align_of::<U56>(), 1);
+        assert_eq!(core::mem::align_of::<U64>(), 1);
+    }
+}

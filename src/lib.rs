@@ -62,7 +62,7 @@ pub use delta::{Accumulator, DeltaEncoding};
 use get_size2::{GetSize, GetSizeTracker};
 #[cfg(not(feature = "sync"))]
 use hashbrown::HashTable;
-pub use index::{Index, U24, U40, U48, U56};
+pub use index::{Index, U16, U24, U32, U40, U48, U56, U64};
 pub use mapping::{ForwardMapping, Mapping, ReverseMapping};
 #[cfg(feature = "retain")]
 pub use mapping::{RetainBuilder, RetainSliceBuilder, RetainStrBuilder};
