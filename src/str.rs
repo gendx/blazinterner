@@ -1,6 +1,6 @@
-#[cfg(feature = "serde")]
-use crate::RangeWrapper;
 use crate::{CopyRange, DefaultBuildHasher, Index};
+#[cfg(feature = "serde")]
+use crate::{RangeWrapper, SnapshotRangeWrapper};
 #[cfg(any(feature = "serde", not(feature = "sync")))]
 use alloc::string::String;
 #[cfg(any(feature = "serde", not(feature = "sync")))]
@@ -20,7 +20,7 @@ use get_size2::{GetSize, GetSizeTracker};
 #[cfg(not(feature = "sync"))]
 use hashbrown::HashTable;
 #[cfg(feature = "serde")]
-use serde::de::{Error, SeqAccess, Visitor};
+use serde::de::{DeserializeSeed, Error, SeqAccess, Visitor};
 #[cfg(feature = "serde")]
 use serde::ser::SerializeTuple;
 #[cfg(feature = "serde")]
@@ -327,6 +327,21 @@ impl<H, I> ArenaStr<H, I> {
     /// other threads are inserting values.
     pub fn is_empty(&self) -> bool {
         self.strings() == 0
+    }
+
+    /// Returns a snapshot of this arena.
+    ///
+    /// Note that because [`ArenaStr`] is a concurrent data structure, this is
+    /// only a snapshot as viewed by this thread.
+    ///
+    /// Snapshots can be diffed into a [`SnapshotStrDiff`], which is useful to
+    /// serialize an arena incrementally as values are added to it.
+    #[cfg(feature = "serde")]
+    pub fn snapshot(&self) -> SnapshotStr<'_, H, I> {
+        SnapshotStr {
+            arena: self,
+            mark: self.strings(),
+        }
     }
 }
 
@@ -733,6 +748,201 @@ where
         }
 
         Ok(arena)
+    }
+}
+
+/// A mark indicates the position of a [`SnapshotStr`] in an [`ArenaStr`].
+///
+/// This allows creating a difference between two snapshots, via
+/// [`SnapshotStr::diff()`].
+#[cfg(feature = "serde")]
+pub struct SnapshotStrMark<H = DefaultBuildHasher, I = u32> {
+    mark: usize,
+    _phantom: PhantomData<fn() -> ArenaStr<H, I>>,
+}
+
+#[cfg(feature = "serde")]
+impl<H, I> Default for SnapshotStrMark<H, I> {
+    fn default() -> Self {
+        Self {
+            mark: 0,
+            _phantom: PhantomData,
+        }
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<H, I> Clone for SnapshotStrMark<H, I> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<H, I> Copy for SnapshotStrMark<H, I> {}
+
+/// Snapshot of an [`ArenaStr`].
+///
+/// This struct is created by the [`snapshot()`](ArenaStr::snapshot) function on
+/// [`ArenaStr`].
+#[cfg(feature = "serde")]
+pub struct SnapshotStr<'a, H = DefaultBuildHasher, I = u32> {
+    arena: &'a ArenaStr<H, I>,
+    mark: usize,
+}
+
+#[cfg(feature = "serde")]
+impl<H, I> SnapshotStr<'_, H, I> {
+    /// Returns the position of this snapshot in the arena.
+    pub fn mark(&self) -> SnapshotStrMark<H, I> {
+        SnapshotStrMark {
+            mark: self.mark,
+            _phantom: PhantomData,
+        }
+    }
+
+    /// Returns the difference between this snapshot and a previous mark.
+    pub fn diff(&self, start: SnapshotStrMark<H, I>) -> SnapshotStrDiff<'_, H, I> {
+        SnapshotStrDiff {
+            arena: self.arena,
+            start: start.mark,
+            end: self.mark,
+        }
+    }
+}
+
+/// Difference between two snapshots of an [`ArenaStr`].
+///
+/// This is useful to serialize and arena incrementally as more values are added
+/// to it.
+#[cfg(feature = "serde")]
+pub struct SnapshotStrDiff<'a, H = DefaultBuildHasher, I = u32> {
+    arena: &'a ArenaStr<H, I>,
+    start: usize,
+    end: usize,
+}
+
+#[cfg(feature = "serde")]
+impl<H, I> Serialize for SnapshotStrDiff<'_, H, I>
+where
+    I: Index + Serialize,
+{
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut tuple = serializer.serialize_tuple(2)?;
+
+        let ranges = SnapshotRangeWrapper::new(&self.arena.rangevec.ranges, self.start, self.end);
+        tuple.serialize_element(&ranges)?;
+
+        let total_len = ranges.into_inner();
+        tuple.serialize_element(&SnapshotArenaStrWrapper {
+            total_len,
+            start: self.start,
+            end: self.end,
+            rangevec: &self.arena.rangevec,
+        })?;
+
+        tuple.end()
+    }
+}
+
+#[cfg(feature = "serde")]
+struct SnapshotArenaStrWrapper<'a, I> {
+    total_len: I,
+    start: usize,
+    end: usize,
+    rangevec: &'a RangeVecStr<I>,
+}
+
+#[cfg(feature = "serde")]
+impl<'a, I> Serialize for SnapshotArenaStrWrapper<'a, I>
+where
+    I: Index,
+{
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        // TODO: Make this zero-copy?
+        let mut string = String::with_capacity(self.total_len.to_usize());
+        for range in self.rangevec.ranges.iter().take(self.end).skip(self.start) {
+            let s = &self.rangevec.vec[range.start.to_usize()..range.end.to_usize()];
+            string.push_str(s);
+        }
+
+        serializer.serialize_str(&string)
+    }
+}
+
+/// Wrapper to extend an [`ArenaStr`] incrementally, typically by deserializing
+/// a sequence of serialized [`SnapshotStrDiff`].
+#[cfg(feature = "serde")]
+pub struct ExtendArenaStr<'a, H = DefaultBuildHasher, I = u32> {
+    arena: &'a mut ArenaStr<H, I>,
+}
+
+#[cfg(feature = "serde")]
+impl<'a, H, I> ExtendArenaStr<'a, H, I> {
+    /// Wraps the given arena to deserialize into it.
+    pub fn new(arena: &'a mut ArenaStr<H, I>) -> Self {
+        Self { arena }
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de, H, I> DeserializeSeed<'de> for ExtendArenaStr<'_, H, I>
+where
+    H: Default + BuildHasher,
+    I: Index + Deserialize<'de>,
+{
+    type Value = ();
+
+    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_tuple(2, ExtendArenaStrVisitor { arena: self.arena })
+    }
+}
+
+#[cfg(feature = "serde")]
+struct ExtendArenaStrVisitor<'a, H, I> {
+    arena: &'a mut ArenaStr<H, I>,
+}
+
+#[cfg(feature = "serde")]
+impl<'de, H, I> Visitor<'de> for ExtendArenaStrVisitor<'_, H, I>
+where
+    H: Default + BuildHasher,
+    I: Index + Deserialize<'de>,
+{
+    type Value = ();
+
+    fn expecting(&self, formatter: &mut core::fmt::Formatter) -> core::fmt::Result {
+        formatter.write_str("a pair of values")
+    }
+
+    fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+    where
+        A: SeqAccess<'de>,
+    {
+        let sizes: Vec<I> = seq
+            .next_element()?
+            .ok_or_else(|| A::Error::invalid_length(0, &self))?;
+        let string: CowStr = seq
+            .next_element()?
+            .ok_or_else(|| A::Error::invalid_length(1, &self))?;
+
+        let mut start = 0;
+        for size in sizes {
+            let size = size.to_usize();
+            self.arena.push(&string.0[start..start + size]);
+            start += size;
+        }
+
+        Ok(())
     }
 }
 

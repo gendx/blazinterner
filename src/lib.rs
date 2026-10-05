@@ -67,16 +67,20 @@ pub use mapping::{ForwardMapping, Mapping, ReverseMapping};
 #[cfg(feature = "retain")]
 pub use mapping::{RetainBuilder, RetainSliceBuilder, RetainStrBuilder};
 #[cfg(feature = "serde")]
-use serde::de::{SeqAccess, Visitor};
+use serde::de::{DeserializeSeed, SeqAccess, Visitor};
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use slice::CopyRange;
-#[cfg(feature = "serde")]
-use slice::RangeWrapper;
 pub use slice::{ArenaSlice, InternedSlice};
+#[cfg(feature = "serde")]
+pub use slice::{ExtendArenaSlice, SnapshotSlice, SnapshotSliceDiff, SnapshotSliceMark};
+#[cfg(feature = "serde")]
+use slice::{RangeWrapper, SnapshotRangeWrapper};
 #[cfg(feature = "std")]
 use std::hash::RandomState;
 pub use str::{ArenaStr, InternedStr};
+#[cfg(feature = "serde")]
+pub use str::{ExtendArenaStr, SnapshotStr, SnapshotStrDiff, SnapshotStrMark};
 
 /// The default [`BuildHasher`] from the `hashbrown` crate.
 pub type HashbrownBuildHasher = hashbrown::DefaultHashBuilder;
@@ -317,6 +321,21 @@ impl<T: ?Sized, Storage, H, I> Arena<T, Storage, H, I> {
     /// threads are inserting values.
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+
+    /// Returns a snapshot of this arena.
+    ///
+    /// Note that because [`Arena`] is a concurrent data structure, this is only
+    /// a snapshot as viewed by this thread.
+    ///
+    /// Snapshots can be diffed into a [`SnapshotDiff`], which is useful to
+    /// serialize an arena incrementally as values are added to it.
+    #[cfg(feature = "serde")]
+    pub fn snapshot(&self) -> Snapshot<'_, T, Storage, H, I> {
+        Snapshot {
+            arena: self,
+            mark: self.len(),
+        }
     }
 }
 
@@ -735,6 +754,174 @@ where
         }
 
         Ok(arena)
+    }
+}
+
+/// A mark indicates the position of a [`Snapshot`] in an [`Arena`].
+///
+/// This allows creating a difference between two snapshots, via
+/// [`Snapshot::diff()`].
+#[cfg(feature = "serde")]
+#[expect(clippy::type_complexity)]
+pub struct SnapshotMark<T: ?Sized, Storage = T, H = DefaultBuildHasher, I = u32> {
+    mark: usize,
+    _phantom: PhantomData<fn() -> Arena<T, Storage, H, I>>,
+}
+
+#[cfg(feature = "serde")]
+impl<T: ?Sized, Storage, H, I> Default for SnapshotMark<T, Storage, H, I> {
+    fn default() -> Self {
+        Self {
+            mark: 0,
+            _phantom: PhantomData,
+        }
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<T: ?Sized, Storage, H, I> Clone for SnapshotMark<T, Storage, H, I> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<T: ?Sized, Storage, H, I> Copy for SnapshotMark<T, Storage, H, I> {}
+
+/// Snapshot of an [`Arena`].
+///
+/// This struct is created by the [`snapshot()`](Arena::snapshot) function on
+/// [`Arena`].
+#[cfg(feature = "serde")]
+pub struct Snapshot<'a, T: ?Sized, Storage = T, H = DefaultBuildHasher, I = u32> {
+    arena: &'a Arena<T, Storage, H, I>,
+    mark: usize,
+}
+
+#[cfg(feature = "serde")]
+impl<T: ?Sized, Storage, H, I> Snapshot<'_, T, Storage, H, I> {
+    /// Returns the position of this snapshot in the arena.
+    pub fn mark(&self) -> SnapshotMark<T, Storage, H, I> {
+        SnapshotMark {
+            mark: self.mark,
+            _phantom: PhantomData,
+        }
+    }
+
+    /// Returns the difference between this snapshot and a previous mark.
+    pub fn diff(
+        &self,
+        start: SnapshotMark<T, Storage, H, I>,
+    ) -> SnapshotDiff<'_, T, Storage, H, I> {
+        SnapshotDiff {
+            arena: self.arena,
+            start: start.mark,
+            end: self.mark,
+        }
+    }
+}
+
+/// Difference between two snapshots of an [`Arena`].
+///
+/// This is useful to serialize and arena incrementally as more values are added
+/// to it.
+#[cfg(feature = "serde")]
+pub struct SnapshotDiff<'a, T: ?Sized, Storage = T, H = DefaultBuildHasher, I = u32> {
+    arena: &'a Arena<T, Storage, H, I>,
+    start: usize,
+    end: usize,
+}
+
+#[cfg(feature = "serde")]
+impl<T: ?Sized, Storage, H, I> SnapshotDiff<'_, T, Storage, H, I>
+where
+    Storage: Borrow<T>,
+{
+    fn iter(&self) -> impl ExactSizeIterator<Item = &T> {
+        self.arena
+            .vec
+            .iter()
+            .take(self.end)
+            .skip(self.start)
+            .map(|x| x.borrow())
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<T: ?Sized, Storage, H, I> Serialize for SnapshotDiff<'_, T, Storage, H, I>
+where
+    T: Serialize,
+    Storage: Borrow<T>,
+    I: Index,
+{
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.collect_seq(self.iter())
+    }
+}
+
+/// Wrapper to extend an [`Arena`] incrementally, typically by deserializing a
+/// sequence of serialized [`SnapshotDiff`].
+#[cfg(feature = "serde")]
+pub struct ExtendArena<'a, T: ?Sized, Storage = T, H = DefaultBuildHasher, I = u32> {
+    arena: &'a mut Arena<T, Storage, H, I>,
+}
+
+#[cfg(feature = "serde")]
+impl<'a, T: ?Sized, Storage, H, I> ExtendArena<'a, T, Storage, H, I> {
+    /// Wraps the given arena to deserialize into it.
+    pub fn new(arena: &'a mut Arena<T, Storage, H, I>) -> Self {
+        Self { arena }
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de, T: ?Sized, Storage, H, I> DeserializeSeed<'de> for ExtendArena<'_, T, Storage, H, I>
+where
+    T: Eq + Hash,
+    Storage: Borrow<T> + Deserialize<'de>,
+    H: Default + BuildHasher,
+    I: Index,
+{
+    type Value = ();
+
+    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_seq(ExtendArenaVisitor { arena: self.arena })
+    }
+}
+
+#[cfg(feature = "serde")]
+struct ExtendArenaVisitor<'a, T: ?Sized, Storage, H, I> {
+    arena: &'a mut Arena<T, Storage, H, I>,
+}
+
+#[cfg(feature = "serde")]
+impl<'de, T: ?Sized, Storage, H, I> Visitor<'de> for ExtendArenaVisitor<'_, T, Storage, H, I>
+where
+    T: Eq + Hash,
+    Storage: Borrow<T> + Deserialize<'de>,
+    H: Default + BuildHasher,
+    I: Index,
+{
+    type Value = ();
+
+    fn expecting(&self, formatter: &mut core::fmt::Formatter) -> core::fmt::Result {
+        formatter.write_str("a sequence of values")
+    }
+
+    fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+    where
+        A: SeqAccess<'de>,
+    {
+        while let Some(t) = seq.next_element()? {
+            self.arena.push(t);
+        }
+        Ok(())
     }
 }
 

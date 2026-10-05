@@ -19,7 +19,7 @@ use get_size2::{GetSize, GetSizeTracker};
 #[cfg(not(feature = "sync"))]
 use hashbrown::HashTable;
 #[cfg(feature = "serde")]
-use serde::de::{Error, SeqAccess, Visitor};
+use serde::de::{DeserializeSeed, Error, SeqAccess, Visitor};
 #[cfg(feature = "serde")]
 use serde::ser::{SerializeSeq, SerializeTuple};
 #[cfg(feature = "serde")]
@@ -341,6 +341,21 @@ impl<T, H, I> ArenaSlice<T, H, I> {
     /// other threads are inserting values.
     pub fn is_empty(&self) -> bool {
         self.slices() == 0
+    }
+
+    /// Returns a snapshot of this arena.
+    ///
+    /// Note that because [`ArenaSlice`] is a concurrent data structure, this is
+    /// only a snapshot as viewed by this thread.
+    ///
+    /// Snapshots can be diffed into a [`SnapshotSliceDiff`], which is useful to
+    /// serialize an arena incrementally as values are added to it.
+    #[cfg(feature = "serde")]
+    pub fn snapshot(&self) -> SnapshotSlice<'_, T, H, I> {
+        SnapshotSlice {
+            arena: self,
+            mark: self.slices(),
+        }
     }
 }
 
@@ -1403,6 +1418,271 @@ where
         }
 
         Ok(arena)
+    }
+}
+
+/// A mark indicates the position of a [`SnapshotSlice`] in an [`ArenaSlice`].
+///
+/// This allows creating a difference between two snapshots, via
+/// [`SnapshotSlice::diff()`].
+#[cfg(feature = "serde")]
+#[expect(clippy::type_complexity)]
+pub struct SnapshotSliceMark<T, H = DefaultBuildHasher, I = u32> {
+    mark: usize,
+    _phantom: PhantomData<fn() -> ArenaSlice<T, H, I>>,
+}
+
+#[cfg(feature = "serde")]
+impl<T, H, I> Default for SnapshotSliceMark<T, H, I> {
+    fn default() -> Self {
+        Self {
+            mark: 0,
+            _phantom: PhantomData,
+        }
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<T, H, I> Clone for SnapshotSliceMark<T, H, I> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<T, H, I> Copy for SnapshotSliceMark<T, H, I> {}
+
+/// Snapshot of an [`ArenaSlice`].
+///
+/// This struct is created by the [`snapshot()`](ArenaSlice::snapshot) function
+/// on [`ArenaSlice`].
+#[cfg(feature = "serde")]
+pub struct SnapshotSlice<'a, T, H = DefaultBuildHasher, I = u32> {
+    arena: &'a ArenaSlice<T, H, I>,
+    mark: usize,
+}
+
+#[cfg(feature = "serde")]
+impl<T, H, I> SnapshotSlice<'_, T, H, I> {
+    /// Returns the position of this snapshot in the arena.
+    pub fn mark(&self) -> SnapshotSliceMark<T, H, I> {
+        SnapshotSliceMark {
+            mark: self.mark,
+            _phantom: PhantomData,
+        }
+    }
+
+    /// Returns the difference between this snapshot and a previous mark.
+    pub fn diff(&self, start: SnapshotSliceMark<T, H, I>) -> SnapshotSliceDiff<'_, T, H, I> {
+        SnapshotSliceDiff {
+            arena: self.arena,
+            start: start.mark,
+            end: self.mark,
+        }
+    }
+}
+
+/// Difference between two snapshots of an [`ArenaSlice`].
+///
+/// This is useful to serialize and arena incrementally as more values are added
+/// to it.
+#[cfg(feature = "serde")]
+pub struct SnapshotSliceDiff<'a, T, H = DefaultBuildHasher, I = u32> {
+    arena: &'a ArenaSlice<T, H, I>,
+    start: usize,
+    end: usize,
+}
+
+#[cfg(feature = "serde")]
+impl<T, H, I> Serialize for SnapshotSliceDiff<'_, T, H, I>
+where
+    T: Serialize,
+    I: Index + Serialize,
+{
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut tuple = serializer.serialize_tuple(2)?;
+
+        let ranges = SnapshotRangeWrapper::new(&self.arena.rangevec.ranges, self.start, self.end);
+        tuple.serialize_element(&ranges)?;
+
+        let total_len = ranges.into_inner();
+        tuple.serialize_element(&SnapshotArenaSliceWrapper {
+            total_len,
+            start: self.start,
+            end: self.end,
+            rangevec: &self.arena.rangevec,
+        })?;
+
+        tuple.end()
+    }
+}
+
+#[cfg(feature = "serde")]
+pub(crate) struct SnapshotRangeWrapper<'a, I> {
+    #[cfg(not(feature = "sync"))]
+    ranges: &'a [CopyRange<I>],
+    #[cfg(feature = "sync")]
+    ranges: &'a AppendVec<CopyRange<I>>,
+    start: usize,
+    end: usize,
+    total_len: Cell<I>,
+}
+
+#[cfg(feature = "serde")]
+impl<'a, I> SnapshotRangeWrapper<'a, I>
+where
+    I: Index,
+{
+    pub fn new(
+        #[cfg(not(feature = "sync"))] ranges: &'a [CopyRange<I>],
+        #[cfg(feature = "sync")] ranges: &'a AppendVec<CopyRange<I>>,
+        start: usize,
+        end: usize,
+    ) -> Self {
+        Self {
+            ranges,
+            start,
+            end,
+            total_len: Cell::new(I::ZERO),
+        }
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'a, I> SnapshotRangeWrapper<'a, I> {
+    pub fn into_inner(self) -> I {
+        self.total_len.into_inner()
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'a, I> Serialize for SnapshotRangeWrapper<'a, I>
+where
+    I: Index + Serialize,
+{
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut total_len = I::ZERO;
+        let result =
+            serializer.collect_seq(self.ranges.iter().take(self.end).skip(self.start).map(
+                |range| {
+                    let this_len = range.end - range.start;
+                    total_len = total_len.strict_add(this_len);
+                    this_len
+                },
+            ));
+
+        self.total_len.set(total_len);
+
+        result
+    }
+}
+
+#[cfg(feature = "serde")]
+struct SnapshotArenaSliceWrapper<'a, T, I> {
+    total_len: I,
+    start: usize,
+    end: usize,
+    rangevec: &'a RangeVec<T, I>,
+}
+
+#[cfg(feature = "serde")]
+impl<'a, T, I> Serialize for SnapshotArenaSliceWrapper<'a, T, I>
+where
+    T: Serialize,
+    I: Index,
+{
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut seq = serializer.serialize_seq(Some(self.total_len.to_usize()))?;
+
+        for range in self.rangevec.ranges.iter().take(self.end).skip(self.start) {
+            let slice = &self.rangevec.vec[range.start.to_usize()..range.end.to_usize()];
+            for t in slice {
+                seq.serialize_element(t)?;
+            }
+        }
+
+        seq.end()
+    }
+}
+
+/// Wrapper to extend an [`ArenaSlice`] incrementally, typically by
+/// deserializing a sequence of serialized [`SnapshotSliceDiff`].
+#[cfg(feature = "serde")]
+pub struct ExtendArenaSlice<'a, T, H = DefaultBuildHasher, I = u32> {
+    arena: &'a mut ArenaSlice<T, H, I>,
+}
+
+#[cfg(feature = "serde")]
+impl<'a, T, H, I> ExtendArenaSlice<'a, T, H, I> {
+    /// Wraps the given arena to deserialize into it.
+    pub fn new(arena: &'a mut ArenaSlice<T, H, I>) -> Self {
+        Self { arena }
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de, T, H, I> DeserializeSeed<'de> for ExtendArenaSlice<'_, T, H, I>
+where
+    T: Default + Clone + Eq + Hash + Deserialize<'de>,
+    H: Default + BuildHasher,
+    I: Index + Deserialize<'de>,
+{
+    type Value = ();
+
+    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_tuple(2, ExtendArenaSliceVisitor { arena: self.arena })
+    }
+}
+
+#[cfg(feature = "serde")]
+struct ExtendArenaSliceVisitor<'a, T, H, I> {
+    arena: &'a mut ArenaSlice<T, H, I>,
+}
+
+#[cfg(feature = "serde")]
+impl<'de, T, H, I> Visitor<'de> for ExtendArenaSliceVisitor<'_, T, H, I>
+where
+    T: Default + Clone + Eq + Hash + Deserialize<'de>,
+    H: Default + BuildHasher,
+    I: Index + Deserialize<'de>,
+{
+    type Value = ();
+
+    fn expecting(&self, formatter: &mut core::fmt::Formatter) -> core::fmt::Result {
+        formatter.write_str("a pair of values")
+    }
+
+    fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+    where
+        A: SeqAccess<'de>,
+    {
+        let sizes: Vec<I> = seq
+            .next_element()?
+            .ok_or_else(|| A::Error::invalid_length(0, &self))?;
+        let values: Vec<T> = seq
+            .next_element()?
+            .ok_or_else(|| A::Error::invalid_length(1, &self))?;
+
+        let mut start = 0;
+        for size in sizes {
+            let size = size.to_usize();
+            self.arena.push(&values[start..start + size]);
+            start += size;
+        }
+
+        Ok(())
     }
 }
 
