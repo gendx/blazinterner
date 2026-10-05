@@ -2,6 +2,8 @@ use core::cmp::Ordering;
 use core::fmt::Debug;
 use core::hash::Hash;
 use core::ops::{AddAssign, Sub};
+#[cfg(feature = "get-size2")]
+use get_size2::GetSize;
 #[cfg(feature = "serde")]
 use serde::de::{self, Unexpected};
 #[cfg(feature = "serde")]
@@ -175,6 +177,7 @@ macro_rules! impl_index {
 /// A 16-bit index (2 bytes). Contrary to [`u16`], this type has an alignment of
 /// 1.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "get-size2", derive(GetSize))]
 pub struct U16([u8; 2]);
 
 impl U16 {
@@ -202,6 +205,7 @@ impl_index!(U16, u16, 2);
 
 /// A 24-bit index (3 bytes).
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "get-size2", derive(GetSize))]
 pub struct U24([u8; 3]);
 
 impl U24 {
@@ -243,6 +247,7 @@ impl_index!(U24, u32, 3);
 /// A 32-bit index (4 bytes). Contrary to [`u32`], this type has an alignment of
 /// 1.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "get-size2", derive(GetSize))]
 pub struct U32([u8; 4]);
 
 impl U32 {
@@ -270,6 +275,7 @@ impl_index!(U32, u32, 4);
 
 /// A 40-bit index (5 bytes).
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "get-size2", derive(GetSize))]
 pub struct U40([u8; 5]);
 
 impl U40 {
@@ -310,6 +316,7 @@ impl_index!(U40, u64, 5);
 
 /// A 48-bit index (6 bytes).
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "get-size2", derive(GetSize))]
 pub struct U48([u8; 6]);
 
 impl U48 {
@@ -350,6 +357,7 @@ impl_index!(U48, u64, 6);
 
 /// A 56-bit index (7 bytes).
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "get-size2", derive(GetSize))]
 pub struct U56([u8; 7]);
 
 impl U56 {
@@ -391,6 +399,7 @@ impl_index!(U56, u64, 7);
 /// A 64-bit index (8 bytes). Contrary to [`u64`], this type has an alignment of
 /// 1.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "get-size2", derive(GetSize))]
 pub struct U64([u8; 8]);
 
 impl U64 {
