@@ -1,3 +1,5 @@
+#[cfg(feature = "serde")]
+use crate::RangeWrapper;
 use crate::{CopyRange, DefaultBuildHasher, Index};
 #[cfg(any(feature = "serde", not(feature = "sync")))]
 use alloc::string::String;
@@ -5,8 +7,6 @@ use alloc::string::String;
 use alloc::vec::Vec;
 #[cfg(feature = "sync")]
 use appendvec::{AppendStr, AppendVec};
-#[cfg(feature = "serde")]
-use core::cell::Cell;
 use core::cmp::Ordering;
 use core::fmt::Debug;
 use core::hash::{BuildHasher, Hash, Hasher};
@@ -631,55 +631,17 @@ where
     {
         let mut tuple = serializer.serialize_tuple(2)?;
 
-        let ranges = RangeWrapper {
-            ranges: &self.rangevec.ranges,
-            ranges_len: Cell::new(I::ZERO),
-            total_len: Cell::new(I::ZERO),
-        };
+        let ranges = RangeWrapper::new(&self.rangevec.ranges);
         tuple.serialize_element(&ranges)?;
 
+        let (ranges_len, total_len) = ranges.into_parts();
         tuple.serialize_element(&ArenaStrWrapper {
-            ranges_len: ranges.ranges_len.into_inner(),
-            total_len: ranges.total_len.into_inner(),
+            ranges_len,
+            total_len,
             rangevec: &self.rangevec,
         })?;
 
         tuple.end()
-    }
-}
-
-#[cfg(feature = "serde")]
-struct RangeWrapper<'a, I> {
-    #[cfg(not(feature = "sync"))]
-    ranges: &'a [CopyRange<I>],
-    #[cfg(feature = "sync")]
-    ranges: &'a AppendVec<CopyRange<I>>,
-    ranges_len: Cell<I>,
-    total_len: Cell<I>,
-}
-
-#[cfg(feature = "serde")]
-impl<'a, I> Serialize for RangeWrapper<'a, I>
-where
-    I: Index + Serialize,
-{
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let mut ranges_len = I::ZERO;
-        let mut total_len = I::ZERO;
-        let result = serializer.collect_seq(self.ranges.iter().map(|range| {
-            ranges_len.incr();
-            let this_len = range.end - range.start;
-            total_len = total_len.strict_add(this_len);
-            this_len
-        }));
-
-        self.ranges_len.set(ranges_len);
-        self.total_len.set(total_len);
-
-        result
     }
 }
 
@@ -794,16 +756,13 @@ mod delta {
         {
             let mut tuple = serializer.serialize_tuple(2)?;
 
-            let ranges = RangeWrapper {
-                ranges: &self.rangevec.ranges,
-                ranges_len: Cell::new(I::ZERO),
-                total_len: Cell::new(I::ZERO),
-            };
+            let ranges = RangeWrapper::new(&self.rangevec.ranges);
             tuple.serialize_element(&ranges)?;
 
+            let (ranges_len, total_len) = ranges.into_parts();
             tuple.serialize_element(&ArenaStrWrapper {
-                ranges_len: ranges.ranges_len.into_inner(),
-                total_len: ranges.total_len.into_inner(),
+                ranges_len,
+                total_len,
                 rangevec: &self.map_ref(|arena| &arena.rangevec),
             })?;
 

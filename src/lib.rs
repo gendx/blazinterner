@@ -71,6 +71,8 @@ use serde::de::{SeqAccess, Visitor};
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use slice::CopyRange;
+#[cfg(feature = "serde")]
+use slice::RangeWrapper;
 pub use slice::{ArenaSlice, InternedSlice};
 #[cfg(feature = "std")]
 use std::hash::RandomState;

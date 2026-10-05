@@ -1236,16 +1236,13 @@ where
     {
         let mut tuple = serializer.serialize_tuple(2)?;
 
-        let ranges = RangeWrapper {
-            ranges: &self.rangevec.ranges,
-            ranges_len: Cell::new(I::ZERO),
-            total_len: Cell::new(I::ZERO),
-        };
+        let ranges = RangeWrapper::new(&self.rangevec.ranges);
         tuple.serialize_element(&ranges)?;
 
+        let (ranges_len, total_len) = ranges.into_parts();
         tuple.serialize_element(&ArenaSliceWrapper {
-            ranges_len: ranges.ranges_len.into_inner(),
-            total_len: ranges.total_len.into_inner(),
+            ranges_len,
+            total_len,
             rangevec: &self.rangevec,
         })?;
 
@@ -1254,13 +1251,37 @@ where
 }
 
 #[cfg(feature = "serde")]
-struct RangeWrapper<'a, I> {
+pub(crate) struct RangeWrapper<'a, I> {
     #[cfg(not(feature = "sync"))]
     ranges: &'a [CopyRange<I>],
     #[cfg(feature = "sync")]
     ranges: &'a AppendVec<CopyRange<I>>,
     ranges_len: Cell<I>,
     total_len: Cell<I>,
+}
+
+#[cfg(feature = "serde")]
+impl<'a, I> RangeWrapper<'a, I>
+where
+    I: Index,
+{
+    pub fn new(
+        #[cfg(not(feature = "sync"))] ranges: &'a [CopyRange<I>],
+        #[cfg(feature = "sync")] ranges: &'a AppendVec<CopyRange<I>>,
+    ) -> Self {
+        Self {
+            ranges,
+            ranges_len: Cell::new(I::ZERO),
+            total_len: Cell::new(I::ZERO),
+        }
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'a, I> RangeWrapper<'a, I> {
+    pub fn into_parts(self) -> (I, I) {
+        (self.ranges_len.into_inner(), self.total_len.into_inner())
+    }
 }
 
 #[cfg(feature = "serde")]
@@ -1403,16 +1424,13 @@ mod delta {
         {
             let mut tuple = serializer.serialize_tuple(2)?;
 
-            let ranges = RangeWrapper {
-                ranges: &self.rangevec.ranges,
-                ranges_len: Cell::new(I::ZERO),
-                total_len: Cell::new(I::ZERO),
-            };
+            let ranges = RangeWrapper::new(&self.rangevec.ranges);
             tuple.serialize_element(&ranges)?;
 
+            let (ranges_len, total_len) = ranges.into_parts();
             tuple.serialize_element(&ArenaSliceWrapper {
-                ranges_len: ranges.ranges_len.into_inner(),
-                total_len: ranges.total_len.into_inner(),
+                ranges_len,
+                total_len,
                 rangevec: &self.map_ref(|arena| &arena.rangevec),
             })?;
 
