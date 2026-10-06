@@ -813,7 +813,7 @@ impl<H, I> SnapshotStr<'_, H, I> {
 
 /// Difference between two snapshots of an [`ArenaStr`].
 ///
-/// This is useful to serialize and arena incrementally as more values are added
+/// This is useful to serialize an arena incrementally as more values are added
 /// to it.
 #[cfg(feature = "serde")]
 pub struct SnapshotStrDiff<'a, H = DefaultBuildHasher, I = u32> {
