@@ -66,6 +66,10 @@ pub use index::{Index, U16, U24, U32, U40, U48, U56, U64};
 pub use mapping::{ForwardMapping, Mapping, ReverseMapping};
 #[cfg(feature = "retain")]
 pub use mapping::{RetainBuilder, RetainSliceBuilder, RetainStrBuilder};
+#[cfg(feature = "postcard-schema")]
+use postcard_schema::Schema;
+#[cfg(feature = "postcard-schema")]
+use postcard_schema::schema::{DataModelType, NamedType};
 #[cfg(feature = "serde")]
 use serde::de::{DeserializeSeed, SeqAccess, Visitor};
 #[cfg(feature = "serde")]
@@ -239,6 +243,17 @@ where
         let id = I::deserialize(deserializer)?;
         Ok(Self::new(id))
     }
+}
+
+#[cfg(feature = "postcard-schema")]
+impl<T: ?Sized, Storage, H, I> Schema for Interned<T, Storage, H, I>
+where
+    I: Schema,
+{
+    const SCHEMA: &'static NamedType = &NamedType {
+        name: "Interned",
+        ty: &DataModelType::NewtypeStruct(I::SCHEMA),
+    };
 }
 
 /// Interning arena for values of type `T`, storing them with the given
@@ -695,6 +710,17 @@ where
     }
 }
 
+#[cfg(feature = "postcard-schema")]
+impl<T: ?Sized, Storage, H, I> Schema for Arena<T, Storage, H, I>
+where
+    T: Schema,
+{
+    const SCHEMA: &'static NamedType = &NamedType {
+        name: "Arena",
+        ty: &DataModelType::Seq(T::SCHEMA),
+    };
+}
+
 #[cfg(feature = "serde")]
 impl<'de, T: ?Sized, Storage, H, I> Deserialize<'de> for Arena<T, Storage, H, I>
 where
@@ -862,6 +888,17 @@ where
     }
 }
 
+#[cfg(all(feature = "serde", feature = "postcard-schema"))]
+impl<T: ?Sized, Storage, H, I> Schema for SnapshotDiff<'_, T, Storage, H, I>
+where
+    T: Schema,
+{
+    const SCHEMA: &'static NamedType = &NamedType {
+        name: "SnapshotDiff",
+        ty: &DataModelType::Seq(T::SCHEMA),
+    };
+}
+
 /// Wrapper to extend an [`Arena`] incrementally, typically by deserializing a
 /// sequence of serialized [`SnapshotDiff`].
 #[cfg(feature = "serde")]
@@ -931,6 +968,42 @@ mod test {
     use std::borrow::Cow;
     #[cfg(feature = "sync")]
     use std::thread;
+
+    #[cfg(feature = "postcard-schema")]
+    #[test]
+    fn test_schemas() {
+        assert_eq!(
+            Interned::<()>::SCHEMA,
+            &NamedType {
+                name: "Interned",
+                ty: &DataModelType::NewtypeStruct(&NamedType {
+                    name: "u32",
+                    ty: &DataModelType::U32,
+                }),
+            }
+        );
+        assert_eq!(
+            Arena::<()>::SCHEMA,
+            &NamedType {
+                name: "Arena",
+                ty: &DataModelType::Seq(&NamedType {
+                    name: "()",
+                    ty: &DataModelType::Unit,
+                }),
+            }
+        );
+        #[cfg(feature = "serde")]
+        assert_eq!(
+            SnapshotDiff::<()>::SCHEMA,
+            &NamedType {
+                name: "SnapshotDiff",
+                ty: &DataModelType::Seq(&NamedType {
+                    name: "()",
+                    ty: &DataModelType::Unit,
+                }),
+            }
+        );
+    }
 
     #[test]
     fn test_default_build_hasher() {

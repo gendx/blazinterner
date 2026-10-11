@@ -18,6 +18,10 @@ use dashtable::DashTable;
 use get_size2::{GetSize, GetSizeTracker};
 #[cfg(not(feature = "sync"))]
 use hashbrown::HashTable;
+#[cfg(feature = "postcard-schema")]
+use postcard_schema::Schema;
+#[cfg(feature = "postcard-schema")]
+use postcard_schema::schema::{DataModelType, NamedType};
 #[cfg(feature = "serde")]
 use serde::de::{DeserializeSeed, Error, SeqAccess, Visitor};
 #[cfg(feature = "serde")]
@@ -44,33 +48,6 @@ impl<I> From<Range<I>> for CopyRange<I> {
 impl<I> From<CopyRange<I>> for Range<I> {
     fn from(other: CopyRange<I>) -> Self {
         other.start..other.end
-    }
-}
-
-#[cfg(feature = "serde")]
-impl<I> Serialize for CopyRange<I>
-where
-    I: Serialize + Copy,
-{
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        (self.start, self.end).serialize(serializer)
-    }
-}
-
-#[cfg(feature = "serde")]
-impl<'de, I> Deserialize<'de> for CopyRange<I>
-where
-    I: Deserialize<'de>,
-{
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let (start, end) = <(I, I)>::deserialize(deserializer)?;
-        Ok(Self { start, end })
     }
 }
 
@@ -188,6 +165,17 @@ where
     {
         self.id.serialize(serializer)
     }
+}
+
+#[cfg(feature = "postcard-schema")]
+impl<T, H, I> Schema for InternedSlice<T, H, I>
+where
+    I: Schema,
+{
+    const SCHEMA: &'static NamedType = &NamedType {
+        name: "InternedSlice",
+        ty: &DataModelType::NewtypeStruct(I::SCHEMA),
+    };
 }
 
 #[cfg(feature = "serde")]
@@ -1265,6 +1253,27 @@ where
     }
 }
 
+#[cfg(feature = "postcard-schema")]
+impl<T, H, I> Schema for ArenaSlice<T, H, I>
+where
+    T: Schema,
+    I: Schema,
+{
+    const SCHEMA: &'static NamedType = &NamedType {
+        name: "ArenaSlice",
+        ty: &DataModelType::Tuple(&[
+            &NamedType {
+                name: "",
+                ty: &DataModelType::Seq(I::SCHEMA),
+            },
+            &NamedType {
+                name: "",
+                ty: &DataModelType::Seq(T::SCHEMA),
+            },
+        ]),
+    };
+}
+
 #[cfg(feature = "serde")]
 pub(crate) struct RangeWrapper<'a, I> {
     #[cfg(not(feature = "sync"))]
@@ -1520,6 +1529,27 @@ where
     }
 }
 
+#[cfg(all(feature = "serde", feature = "postcard-schema"))]
+impl<T, H, I> Schema for SnapshotSliceDiff<'_, T, H, I>
+where
+    T: Schema,
+    I: Schema,
+{
+    const SCHEMA: &'static NamedType = &NamedType {
+        name: "SnapshotSliceDiff",
+        ty: &DataModelType::Tuple(&[
+            &NamedType {
+                name: "",
+                ty: &DataModelType::Seq(I::SCHEMA),
+            },
+            &NamedType {
+                name: "",
+                ty: &DataModelType::Seq(T::SCHEMA),
+            },
+        ]),
+    };
+}
+
 #[cfg(feature = "serde")]
 pub(crate) struct SnapshotRangeWrapper<'a, I> {
     #[cfg(not(feature = "sync"))]
@@ -1718,6 +1748,28 @@ mod delta {
         }
     }
 
+    #[cfg(feature = "postcard-schema")]
+    impl<T, H, I, Delta, Accum> Schema for DeltaEncoding<&ArenaSlice<T, H, I>, Accum>
+    where
+        I: Schema,
+        Delta: Schema,
+        Accum: Accumulator<Value = [T], Storage = Box<[T]>, DeltaStorage = Box<[Delta]>>,
+    {
+        const SCHEMA: &'static NamedType = &NamedType {
+            name: "DeltaEncoding<ArenaSlice>",
+            ty: &DataModelType::Tuple(&[
+                &NamedType {
+                    name: "",
+                    ty: &DataModelType::Seq(I::SCHEMA),
+                },
+                &NamedType {
+                    name: "",
+                    ty: &DataModelType::Seq(Delta::SCHEMA),
+                },
+            ]),
+        };
+    }
+
     struct ArenaSliceWrapper<'a, T, I, Accum> {
         ranges_len: I,
         total_len: I,
@@ -1838,6 +1890,66 @@ mod delta {
 #[cfg(test)]
 mod test {
     use super::*;
+
+    #[cfg(feature = "postcard-schema")]
+    #[test]
+    fn test_schemas() {
+        assert_eq!(
+            InternedSlice::<()>::SCHEMA,
+            &NamedType {
+                name: "InternedSlice",
+                ty: &DataModelType::NewtypeStruct(&NamedType {
+                    name: "u32",
+                    ty: &DataModelType::U32,
+                }),
+            }
+        );
+        assert_eq!(
+            ArenaSlice::<()>::SCHEMA,
+            &NamedType {
+                name: "ArenaSlice",
+                ty: &DataModelType::Tuple(&[
+                    &NamedType {
+                        name: "",
+                        ty: &DataModelType::Seq(&NamedType {
+                            name: "u32",
+                            ty: &DataModelType::U32,
+                        }),
+                    },
+                    &NamedType {
+                        name: "",
+                        ty: &DataModelType::Seq(&NamedType {
+                            name: "()",
+                            ty: &DataModelType::Unit,
+                        }),
+                    }
+                ]),
+            }
+        );
+        #[cfg(feature = "serde")]
+        assert_eq!(
+            SnapshotSliceDiff::<()>::SCHEMA,
+            &NamedType {
+                name: "SnapshotSliceDiff",
+                ty: &DataModelType::Tuple(&[
+                    &NamedType {
+                        name: "",
+                        ty: &DataModelType::Seq(&NamedType {
+                            name: "u32",
+                            ty: &DataModelType::U32,
+                        }),
+                    },
+                    &NamedType {
+                        name: "",
+                        ty: &DataModelType::Seq(&NamedType {
+                            name: "()",
+                            ty: &DataModelType::Unit,
+                        }),
+                    }
+                ]),
+            }
+        );
+    }
 
     #[test]
     fn test_intern_mut_lookup() {

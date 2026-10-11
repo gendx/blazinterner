@@ -4,6 +4,10 @@ use core::hash::Hash;
 use core::ops::{AddAssign, Sub};
 #[cfg(feature = "get-size2")]
 use get_size2::GetSize;
+#[cfg(feature = "postcard-schema")]
+use postcard_schema::Schema;
+#[cfg(feature = "postcard-schema")]
+use postcard_schema::schema::{DataModelType, NamedType};
 #[cfg(feature = "serde")]
 use serde::de::{self, Unexpected};
 #[cfg(feature = "serde")]
@@ -157,6 +161,14 @@ macro_rules! impl_index {
             {
                 self.to_uint().serialize(serializer)
             }
+        }
+
+        #[cfg(feature = "postcard-schema")]
+        impl Schema for $typ {
+            const SCHEMA: &'static NamedType = &NamedType {
+                name: stringify!($typ),
+                ty: &DataModelType::Usize,
+            };
         }
 
         #[cfg(feature = "serde")]
@@ -439,5 +451,86 @@ mod test {
         assert_eq!(core::mem::align_of::<U48>(), 1);
         assert_eq!(core::mem::align_of::<U56>(), 1);
         assert_eq!(core::mem::align_of::<U64>(), 1);
+    }
+
+    #[cfg(feature = "postcard-schema")]
+    #[test]
+    fn test_schemas() {
+        assert_eq!(
+            U16::SCHEMA,
+            &NamedType {
+                name: "U16",
+                ty: &DataModelType::Usize,
+            }
+        );
+        assert_eq!(
+            U24::SCHEMA,
+            &NamedType {
+                name: "U24",
+                ty: &DataModelType::Usize,
+            }
+        );
+        assert_eq!(
+            U32::SCHEMA,
+            &NamedType {
+                name: "U32",
+                ty: &DataModelType::Usize,
+            }
+        );
+        assert_eq!(
+            U40::SCHEMA,
+            &NamedType {
+                name: "U40",
+                ty: &DataModelType::Usize,
+            }
+        );
+        assert_eq!(
+            U48::SCHEMA,
+            &NamedType {
+                name: "U48",
+                ty: &DataModelType::Usize,
+            }
+        );
+        assert_eq!(
+            U56::SCHEMA,
+            &NamedType {
+                name: "U56",
+                ty: &DataModelType::Usize,
+            }
+        );
+        assert_eq!(
+            U64::SCHEMA,
+            &NamedType {
+                name: "U64",
+                ty: &DataModelType::Usize,
+            }
+        );
+    }
+
+    #[cfg(feature = "postcard-schema")]
+    #[derive(Schema)]
+    #[expect(dead_code)]
+    struct Foo(u32);
+
+    #[cfg(feature = "postcard-schema")]
+    #[test]
+    fn test_baseline_schemas() {
+        assert_eq!(
+            u32::SCHEMA,
+            &NamedType {
+                name: "u32",
+                ty: &DataModelType::U32,
+            }
+        );
+        assert_eq!(
+            Foo::SCHEMA,
+            &NamedType {
+                name: "Foo",
+                ty: &DataModelType::NewtypeStruct(&NamedType {
+                    name: "u32",
+                    ty: &DataModelType::U32,
+                }),
+            }
+        );
     }
 }

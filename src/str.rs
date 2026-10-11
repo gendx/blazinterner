@@ -19,6 +19,10 @@ use dashtable::DashTable;
 use get_size2::{GetSize, GetSizeTracker};
 #[cfg(not(feature = "sync"))]
 use hashbrown::HashTable;
+#[cfg(feature = "postcard-schema")]
+use postcard_schema::Schema;
+#[cfg(feature = "postcard-schema")]
+use postcard_schema::schema::{DataModelType, NamedType};
 #[cfg(feature = "serde")]
 use serde::de::{DeserializeSeed, Error, SeqAccess, Visitor};
 #[cfg(feature = "serde")]
@@ -143,6 +147,17 @@ where
     {
         self.id.serialize(serializer)
     }
+}
+
+#[cfg(feature = "postcard-schema")]
+impl<H, I> Schema for InternedStr<H, I>
+where
+    I: Schema,
+{
+    const SCHEMA: &'static NamedType = &NamedType {
+        name: "InternedStr",
+        ty: &DataModelType::NewtypeStruct(I::SCHEMA),
+    };
 }
 
 #[cfg(feature = "serde")]
@@ -660,6 +675,26 @@ where
     }
 }
 
+#[cfg(feature = "postcard-schema")]
+impl<H, I> Schema for ArenaStr<H, I>
+where
+    I: Schema,
+{
+    const SCHEMA: &'static NamedType = &NamedType {
+        name: "ArenaStr",
+        ty: &DataModelType::Tuple(&[
+            &NamedType {
+                name: "",
+                ty: &DataModelType::Seq(I::SCHEMA),
+            },
+            &NamedType {
+                name: "",
+                ty: &DataModelType::String,
+            },
+        ]),
+    };
+}
+
 #[cfg(feature = "serde")]
 struct ArenaStrWrapper<'a, I> {
     ranges_len: I,
@@ -848,6 +883,26 @@ where
     }
 }
 
+#[cfg(all(feature = "serde", feature = "postcard-schema"))]
+impl<H, I> Schema for SnapshotStrDiff<'_, H, I>
+where
+    I: Schema,
+{
+    const SCHEMA: &'static NamedType = &NamedType {
+        name: "SnapshotStrDiff",
+        ty: &DataModelType::Tuple(&[
+            &NamedType {
+                name: "",
+                ty: &DataModelType::Seq(I::SCHEMA),
+            },
+            &NamedType {
+                name: "",
+                ty: &DataModelType::String,
+            },
+        ]),
+    };
+}
+
 #[cfg(feature = "serde")]
 struct SnapshotArenaStrWrapper<'a, I> {
     total_len: I,
@@ -980,6 +1035,27 @@ mod delta {
         }
     }
 
+    #[cfg(feature = "postcard-schema")]
+    impl<H, I, Accum> Schema for DeltaEncoding<&ArenaStr<H, I>, Accum>
+    where
+        I: Schema,
+        Accum: Accumulator<Value = str, Storage = Box<str>, DeltaStorage = Box<[u8]>>,
+    {
+        const SCHEMA: &'static NamedType = &NamedType {
+            name: "DeltaEncoding<ArenaStr>",
+            ty: &DataModelType::Tuple(&[
+                &NamedType {
+                    name: "",
+                    ty: &DataModelType::Seq(I::SCHEMA),
+                },
+                &NamedType {
+                    name: "",
+                    ty: &DataModelType::ByteArray,
+                },
+            ]),
+        };
+    }
+
     struct ArenaStrWrapper<'a, I, Accum> {
         ranges_len: I,
         total_len: I,
@@ -1098,6 +1174,60 @@ mod test {
     use crate::{Accumulator, DeltaEncoding};
     #[cfg(feature = "sync")]
     use std::thread;
+
+    #[cfg(feature = "postcard-schema")]
+    #[test]
+    fn test_schemas() {
+        assert_eq!(
+            InternedStr::<DefaultBuildHasher>::SCHEMA,
+            &NamedType {
+                name: "InternedStr",
+                ty: &DataModelType::NewtypeStruct(&NamedType {
+                    name: "u32",
+                    ty: &DataModelType::U32,
+                }),
+            }
+        );
+        assert_eq!(
+            ArenaStr::<DefaultBuildHasher>::SCHEMA,
+            &NamedType {
+                name: "ArenaStr",
+                ty: &DataModelType::Tuple(&[
+                    &NamedType {
+                        name: "",
+                        ty: &DataModelType::Seq(&NamedType {
+                            name: "u32",
+                            ty: &DataModelType::U32,
+                        }),
+                    },
+                    &NamedType {
+                        name: "",
+                        ty: &DataModelType::String,
+                    }
+                ]),
+            }
+        );
+        #[cfg(feature = "serde")]
+        assert_eq!(
+            SnapshotStrDiff::<DefaultBuildHasher>::SCHEMA,
+            &NamedType {
+                name: "SnapshotStrDiff",
+                ty: &DataModelType::Tuple(&[
+                    &NamedType {
+                        name: "",
+                        ty: &DataModelType::Seq(&NamedType {
+                            name: "u32",
+                            ty: &DataModelType::U32,
+                        }),
+                    },
+                    &NamedType {
+                        name: "",
+                        ty: &DataModelType::String,
+                    }
+                ]),
+            }
+        );
+    }
 
     fn make_utf8_string(i: usize) -> String {
         let mut i = i as u32;
