@@ -15,10 +15,14 @@ use core::marker::PhantomData;
 use core::sync::atomic::{self, AtomicUsize};
 #[cfg(feature = "sync")]
 use dashtable::DashTable;
+#[cfg(feature = "sync")]
+use dashtable::MutEntry;
 #[cfg(feature = "get-size2")]
 use get_size2::{GetSize, GetSizeTracker};
 #[cfg(not(feature = "sync"))]
 use hashbrown::HashTable;
+#[cfg(not(feature = "sync"))]
+use hashbrown::hash_table::Entry;
 #[cfg(feature = "postcard-schema")]
 use postcard_schema::Schema;
 #[cfg(feature = "postcard-schema")]
@@ -258,6 +262,17 @@ impl<I: Index> RangeVecStr<I> {
         assert!(id <= I::MAX.to_usize());
         I::from_usize(id)
     }
+
+    fn truncate(&mut self, len: usize) {
+        self.ranges.truncate(len);
+        let max_index = self
+            .ranges
+            .iter()
+            .map(|range| range.end.to_usize())
+            .max()
+            .unwrap_or(0);
+        self.vec.truncate(max_index);
+    }
 }
 
 /// Interning arena for strings.
@@ -351,7 +366,6 @@ impl<H, I> ArenaStr<H, I> {
     ///
     /// Snapshots can be diffed into a [`SnapshotStrDiff`], which is useful to
     /// serialize an arena incrementally as values are added to it.
-    #[cfg(feature = "serde")]
     pub fn snapshot(&self) -> SnapshotStr<'_, H, I> {
         SnapshotStr {
             arena: self,
@@ -650,6 +664,46 @@ impl<H, I: Index> ArenaStr<H, I> {
     }
 }
 
+impl<H, I> ArenaStr<H, I>
+where
+    H: BuildHasher,
+    I: Index,
+{
+    /// Truncates this interner back to the given snapshot mark.
+    ///
+    /// This is a no-op if the snapshot mark is larger than this interner (for
+    /// example because the interner was already truncated to a smaller snapshot
+    /// in the meantime).
+    pub fn truncate(&mut self, snapshot: SnapshotStrMark<H, I>) {
+        if self.rangevec.ranges.len() <= snapshot.mark {
+            return;
+        }
+
+        for range in self.rangevec.ranges.iter().skip(snapshot.mark) {
+            let value: &str = &self.rangevec.vec[range.start.to_usize()..range.end.to_usize()];
+            let hash = self.hasher.hash_one(value);
+            #[cfg(not(feature = "sync"))]
+            if let Entry::Occupied(entry) = self.map.entry(
+                hash,
+                |&i| self.rangevec.lookup_str(i) == value,
+                |&i| self.hasher.hash_one(self.rangevec.lookup_str(i)),
+            ) {
+                entry.remove();
+            }
+            #[cfg(feature = "sync")]
+            if let MutEntry::Occupied(entry) = self.map.entry_mut(
+                hash,
+                |&i| self.rangevec.lookup_str(i) == value,
+                |&i| self.hasher.hash_one(self.rangevec.lookup_str(i)),
+            ) {
+                entry.remove();
+            }
+        }
+
+        self.rangevec.truncate(snapshot.mark);
+    }
+}
+
 #[cfg(feature = "serde")]
 impl<H, I> Serialize for ArenaStr<H, I>
 where
@@ -790,13 +844,11 @@ where
 ///
 /// This allows creating a difference between two snapshots, via
 /// [`SnapshotStr::diff()`].
-#[cfg(feature = "serde")]
 pub struct SnapshotStrMark<H = DefaultBuildHasher, I = u32> {
     mark: usize,
     _phantom: PhantomData<fn() -> ArenaStr<H, I>>,
 }
 
-#[cfg(feature = "serde")]
 impl<H, I> Default for SnapshotStrMark<H, I> {
     fn default() -> Self {
         Self {
@@ -806,27 +858,24 @@ impl<H, I> Default for SnapshotStrMark<H, I> {
     }
 }
 
-#[cfg(feature = "serde")]
 impl<H, I> Clone for SnapshotStrMark<H, I> {
     fn clone(&self) -> Self {
         *self
     }
 }
 
-#[cfg(feature = "serde")]
 impl<H, I> Copy for SnapshotStrMark<H, I> {}
 
 /// Snapshot of an [`ArenaStr`].
 ///
 /// This struct is created by the [`snapshot()`](ArenaStr::snapshot) function on
 /// [`ArenaStr`].
-#[cfg(feature = "serde")]
 pub struct SnapshotStr<'a, H = DefaultBuildHasher, I = u32> {
+    #[cfg_attr(not(feature = "serde"), expect(dead_code))]
     arena: &'a ArenaStr<H, I>,
     mark: usize,
 }
 
-#[cfg(feature = "serde")]
 impl<H, I> SnapshotStr<'_, H, I> {
     /// Returns the position of this snapshot in the arena.
     pub fn mark(&self) -> SnapshotStrMark<H, I> {
@@ -837,6 +886,7 @@ impl<H, I> SnapshotStr<'_, H, I> {
     }
 
     /// Returns the difference between this snapshot and a previous mark.
+    #[cfg(feature = "serde")]
     pub fn diff(&self, start: SnapshotStrMark<H, I>) -> SnapshotStrDiff<'_, H, I> {
         SnapshotStrDiff {
             arena: self.arena,
@@ -1452,6 +1502,38 @@ mod test {
                 });
             }
         });
+    }
+
+    #[test]
+    fn test_truncate() {
+        let mut arena: ArenaStr = ArenaStr::default();
+
+        let empty = arena.intern_mut("");
+        let a = arena.intern_mut("a");
+        let b = arena.intern_mut("bb");
+        let c = arena.intern_mut("ccc");
+        let snapshot = arena.snapshot().mark();
+
+        arena.intern_mut("dddd");
+        arena.intern_mut("eeeee");
+
+        arena.truncate(snapshot);
+        assert_eq!(arena.strings(), 4);
+        assert_eq!(arena.lookup(empty), "");
+        assert_eq!(arena.lookup(a), "a");
+        assert_eq!(arena.lookup(b), "bb");
+        assert_eq!(arena.lookup(c), "ccc");
+
+        let f = arena.intern_mut("ffffff");
+        let g = arena.intern_mut("ggggggg");
+
+        assert_eq!(arena.strings(), 6);
+        assert_eq!(arena.lookup(empty), "");
+        assert_eq!(arena.lookup(a), "a");
+        assert_eq!(arena.lookup(b), "bb");
+        assert_eq!(arena.lookup(c), "ccc");
+        assert_eq!(arena.lookup(f), "ffffff");
+        assert_eq!(arena.lookup(g), "ggggggg");
     }
 
     #[cfg(feature = "serde")]

@@ -14,10 +14,14 @@ use core::ops::Range;
 use core::sync::atomic::{self, AtomicUsize};
 #[cfg(feature = "sync")]
 use dashtable::DashTable;
+#[cfg(feature = "sync")]
+use dashtable::MutEntry;
 #[cfg(feature = "get-size2")]
 use get_size2::{GetSize, GetSizeTracker};
 #[cfg(not(feature = "sync"))]
 use hashbrown::HashTable;
+#[cfg(not(feature = "sync"))]
+use hashbrown::hash_table::Entry;
 #[cfg(feature = "postcard-schema")]
 use postcard_schema::Schema;
 #[cfg(feature = "postcard-schema")]
@@ -244,6 +248,17 @@ impl<T, I: Index> RangeVec<T, I> {
         assert!(id <= I::MAX.to_usize());
         I::from_usize(id)
     }
+
+    fn truncate(&mut self, len: usize) {
+        self.ranges.truncate(len);
+        let max_index = self
+            .ranges
+            .iter()
+            .map(|range| range.end.to_usize())
+            .max()
+            .unwrap_or(0);
+        self.vec.truncate(max_index);
+    }
 }
 
 /// Interning arena for slices of type `T`.
@@ -338,7 +353,6 @@ impl<T, H, I> ArenaSlice<T, H, I> {
     ///
     /// Snapshots can be diffed into a [`SnapshotSliceDiff`], which is useful to
     /// serialize an arena incrementally as values are added to it.
-    #[cfg(feature = "serde")]
     pub fn snapshot(&self) -> SnapshotSlice<'_, T, H, I> {
         SnapshotSlice {
             arena: self,
@@ -1227,6 +1241,47 @@ impl<T, H, I: Index> ArenaSlice<T, H, I> {
     }
 }
 
+impl<T, H, I> ArenaSlice<T, H, I>
+where
+    T: Eq + Hash,
+    H: BuildHasher,
+    I: Index,
+{
+    /// Truncates this interner back to the given snapshot mark.
+    ///
+    /// This is a no-op if the snapshot mark is larger than this interner (for
+    /// example because the interner was already truncated to a smaller snapshot
+    /// in the meantime).
+    pub fn truncate(&mut self, snapshot: SnapshotSliceMark<T, H, I>) {
+        if self.rangevec.ranges.len() <= snapshot.mark {
+            return;
+        }
+
+        for range in self.rangevec.ranges.iter().skip(snapshot.mark) {
+            let slice = &self.rangevec.vec[range.start.to_usize()..range.end.to_usize()];
+            let hash = self.hash_slice(slice);
+            #[cfg(not(feature = "sync"))]
+            if let Entry::Occupied(entry) = self.map.entry(
+                hash,
+                |&i| self.rangevec.lookup_slice(i) == slice,
+                |&i| Self::hash_iter(&self.hasher, self.rangevec.lookup_slice(i)),
+            ) {
+                entry.remove();
+            }
+            #[cfg(feature = "sync")]
+            if let MutEntry::Occupied(entry) = self.map.entry_mut(
+                hash,
+                |&i| self.rangevec.lookup_slice(i) == slice,
+                |&i| Self::hash_iter(&self.hasher, self.rangevec.lookup_slice(i)),
+            ) {
+                entry.remove();
+            }
+        }
+
+        self.rangevec.truncate(snapshot.mark);
+    }
+}
+
 #[cfg(feature = "serde")]
 impl<T, H, I> Serialize for ArenaSlice<T, H, I>
 where
@@ -1434,14 +1489,12 @@ where
 ///
 /// This allows creating a difference between two snapshots, via
 /// [`SnapshotSlice::diff()`].
-#[cfg(feature = "serde")]
 #[expect(clippy::type_complexity)]
 pub struct SnapshotSliceMark<T, H = DefaultBuildHasher, I = u32> {
     mark: usize,
     _phantom: PhantomData<fn() -> ArenaSlice<T, H, I>>,
 }
 
-#[cfg(feature = "serde")]
 impl<T, H, I> Default for SnapshotSliceMark<T, H, I> {
     fn default() -> Self {
         Self {
@@ -1451,27 +1504,24 @@ impl<T, H, I> Default for SnapshotSliceMark<T, H, I> {
     }
 }
 
-#[cfg(feature = "serde")]
 impl<T, H, I> Clone for SnapshotSliceMark<T, H, I> {
     fn clone(&self) -> Self {
         *self
     }
 }
 
-#[cfg(feature = "serde")]
 impl<T, H, I> Copy for SnapshotSliceMark<T, H, I> {}
 
 /// Snapshot of an [`ArenaSlice`].
 ///
 /// This struct is created by the [`snapshot()`](ArenaSlice::snapshot) function
 /// on [`ArenaSlice`].
-#[cfg(feature = "serde")]
 pub struct SnapshotSlice<'a, T, H = DefaultBuildHasher, I = u32> {
+    #[cfg_attr(not(feature = "serde"), expect(dead_code))]
     arena: &'a ArenaSlice<T, H, I>,
     mark: usize,
 }
 
-#[cfg(feature = "serde")]
 impl<T, H, I> SnapshotSlice<'_, T, H, I> {
     /// Returns the position of this snapshot in the arena.
     pub fn mark(&self) -> SnapshotSliceMark<T, H, I> {
@@ -1482,6 +1532,7 @@ impl<T, H, I> SnapshotSlice<'_, T, H, I> {
     }
 
     /// Returns the difference between this snapshot and a previous mark.
+    #[cfg(feature = "serde")]
     pub fn diff(&self, start: SnapshotSliceMark<T, H, I>) -> SnapshotSliceDiff<'_, T, H, I> {
         SnapshotSliceDiff {
             arena: self.arena,
@@ -1995,5 +2046,37 @@ mod test {
                 assert_eq!(slice, &expected);
             }
         }
+    }
+
+    #[test]
+    fn test_truncate() {
+        let mut arena: ArenaSlice<usize> = ArenaSlice::default();
+
+        let empty = arena.intern_array_mut([]);
+        let a = arena.intern_array_mut([1]);
+        let b = arena.intern_array_mut([2, 2]);
+        let c = arena.intern_array_mut([3, 3, 3]);
+        let snapshot = arena.snapshot().mark();
+
+        arena.intern_array_mut([4, 4, 4, 4]);
+        arena.intern_array_mut([5, 5, 5, 5, 5]);
+
+        arena.truncate(snapshot);
+        assert_eq!(arena.slices(), 4);
+        assert_eq!(arena.lookup(empty), [] as [usize; _]);
+        assert_eq!(arena.lookup(a), [1]);
+        assert_eq!(arena.lookup(b), [2, 2]);
+        assert_eq!(arena.lookup(c), [3, 3, 3]);
+
+        let f = arena.intern_array_mut([6, 6, 6, 6, 6, 6]);
+        let g = arena.intern_array_mut([7, 7, 7, 7, 7, 7, 7]);
+
+        assert_eq!(arena.slices(), 6);
+        assert_eq!(arena.lookup(empty), [] as [usize; _]);
+        assert_eq!(arena.lookup(a), [1]);
+        assert_eq!(arena.lookup(b), [2, 2]);
+        assert_eq!(arena.lookup(c), [3, 3, 3]);
+        assert_eq!(arena.lookup(f), [6, 6, 6, 6, 6, 6]);
+        assert_eq!(arena.lookup(g), [7, 7, 7, 7, 7, 7, 7]);
     }
 }

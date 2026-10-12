@@ -56,12 +56,16 @@ use core::marker::PhantomData;
 use core::sync::atomic::{self, AtomicUsize};
 #[cfg(feature = "sync")]
 use dashtable::DashTable;
+#[cfg(feature = "sync")]
+use dashtable::MutEntry;
 #[cfg(feature = "delta")]
 pub use delta::{Accumulator, DeltaEncoding};
 #[cfg(feature = "get-size2")]
 use get_size2::{GetSize, GetSizeTracker};
 #[cfg(not(feature = "sync"))]
 use hashbrown::HashTable;
+#[cfg(not(feature = "sync"))]
+use hashbrown::hash_table::Entry;
 pub use index::{Index, U16, U24, U32, U40, U48, U56, U64};
 pub use mapping::{ForwardMapping, Mapping, ReverseMapping};
 #[cfg(feature = "retain")]
@@ -75,16 +79,16 @@ use serde::de::{DeserializeSeed, SeqAccess, Visitor};
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use slice::CopyRange;
-pub use slice::{ArenaSlice, InternedSlice};
+pub use slice::{ArenaSlice, InternedSlice, SnapshotSlice, SnapshotSliceMark};
 #[cfg(feature = "serde")]
-pub use slice::{ExtendArenaSlice, SnapshotSlice, SnapshotSliceDiff, SnapshotSliceMark};
+pub use slice::{ExtendArenaSlice, SnapshotSliceDiff};
 #[cfg(feature = "serde")]
 use slice::{RangeWrapper, SnapshotRangeWrapper};
 #[cfg(feature = "std")]
 use std::hash::RandomState;
-pub use str::{ArenaStr, InternedStr};
+pub use str::{ArenaStr, InternedStr, SnapshotStr, SnapshotStrMark};
 #[cfg(feature = "serde")]
-pub use str::{ExtendArenaStr, SnapshotStr, SnapshotStrDiff, SnapshotStrMark};
+pub use str::{ExtendArenaStr, SnapshotStrDiff};
 
 /// The default [`BuildHasher`] from the `hashbrown` crate.
 pub type HashbrownBuildHasher = hashbrown::DefaultHashBuilder;
@@ -345,7 +349,6 @@ impl<T: ?Sized, Storage, H, I> Arena<T, Storage, H, I> {
     ///
     /// Snapshots can be diffed into a [`SnapshotDiff`], which is useful to
     /// serialize an arena incrementally as values are added to it.
-    #[cfg(feature = "serde")]
     pub fn snapshot(&self) -> Snapshot<'_, T, Storage, H, I> {
         Snapshot {
             arena: self,
@@ -695,6 +698,47 @@ where
     }
 }
 
+impl<T: ?Sized, Storage, H, I> Arena<T, Storage, H, I>
+where
+    T: Eq + Hash,
+    Storage: Borrow<T>,
+    H: BuildHasher,
+    I: Index,
+{
+    /// Truncates this interner back to the given snapshot mark.
+    ///
+    /// This is a no-op if the snapshot mark is larger than this interner (for
+    /// example because the interner was already truncated to a smaller snapshot
+    /// in the meantime).
+    pub fn truncate(&mut self, snapshot: SnapshotMark<T, Storage, H, I>) {
+        if self.len() <= snapshot.mark {
+            return;
+        }
+
+        for value in self.vec.iter().skip(snapshot.mark) {
+            let hash = self.hasher.hash_one(value.borrow());
+            #[cfg(not(feature = "sync"))]
+            if let Entry::Occupied(entry) = self.map.entry(
+                hash,
+                |&i| self.vec[i.to_usize()].borrow() == value.borrow(),
+                |&i| self.hasher.hash_one(self.vec[i.to_usize()].borrow()),
+            ) {
+                entry.remove();
+            }
+            #[cfg(feature = "sync")]
+            if let MutEntry::Occupied(entry) = self.map.entry_mut(
+                hash,
+                |&i| self.vec[i.to_usize()].borrow() == value.borrow(),
+                |&i| self.hasher.hash_one(self.vec[i.to_usize()].borrow()),
+            ) {
+                entry.remove();
+            }
+        }
+
+        self.vec.truncate(snapshot.mark);
+    }
+}
+
 #[cfg(feature = "serde")]
 impl<T: ?Sized, Storage, H, I> Serialize for Arena<T, Storage, H, I>
 where
@@ -787,14 +831,12 @@ where
 ///
 /// This allows creating a difference between two snapshots, via
 /// [`Snapshot::diff()`].
-#[cfg(feature = "serde")]
 #[expect(clippy::type_complexity)]
 pub struct SnapshotMark<T: ?Sized, Storage = T, H = DefaultBuildHasher, I = u32> {
     mark: usize,
     _phantom: PhantomData<fn() -> Arena<T, Storage, H, I>>,
 }
 
-#[cfg(feature = "serde")]
 impl<T: ?Sized, Storage, H, I> Default for SnapshotMark<T, Storage, H, I> {
     fn default() -> Self {
         Self {
@@ -804,27 +846,24 @@ impl<T: ?Sized, Storage, H, I> Default for SnapshotMark<T, Storage, H, I> {
     }
 }
 
-#[cfg(feature = "serde")]
 impl<T: ?Sized, Storage, H, I> Clone for SnapshotMark<T, Storage, H, I> {
     fn clone(&self) -> Self {
         *self
     }
 }
 
-#[cfg(feature = "serde")]
 impl<T: ?Sized, Storage, H, I> Copy for SnapshotMark<T, Storage, H, I> {}
 
 /// Snapshot of an [`Arena`].
 ///
 /// This struct is created by the [`snapshot()`](Arena::snapshot) function on
 /// [`Arena`].
-#[cfg(feature = "serde")]
 pub struct Snapshot<'a, T: ?Sized, Storage = T, H = DefaultBuildHasher, I = u32> {
+    #[cfg_attr(not(feature = "serde"), expect(dead_code))]
     arena: &'a Arena<T, Storage, H, I>,
     mark: usize,
 }
 
-#[cfg(feature = "serde")]
 impl<T: ?Sized, Storage, H, I> Snapshot<'_, T, Storage, H, I> {
     /// Returns the position of this snapshot in the arena.
     pub fn mark(&self) -> SnapshotMark<T, Storage, H, I> {
@@ -835,6 +874,7 @@ impl<T: ?Sized, Storage, H, I> Snapshot<'_, T, Storage, H, I> {
     }
 
     /// Returns the difference between this snapshot and a previous mark.
+    #[cfg(feature = "serde")]
     pub fn diff(
         &self,
         start: SnapshotMark<T, Storage, H, I>,
@@ -1307,6 +1347,38 @@ mod test {
 
         let key: Cow<'_, str> = "Hello world".into();
         assert_eq!(arena.intern_mut(key).id.to_usize(), 2);
+    }
+
+    #[test]
+    fn test_truncate() {
+        let mut arena: Arena<usize, Box<usize>> = Arena::default();
+
+        let a = arena.intern_mut(0);
+        let b = arena.intern_mut(1);
+        let c = arena.intern_mut(2);
+        let d = arena.intern_mut(3);
+        let snapshot = arena.snapshot().mark();
+
+        arena.intern_mut(4);
+        arena.intern_mut(5);
+
+        arena.truncate(snapshot);
+        assert_eq!(arena.len(), 4);
+        assert_eq!(arena.lookup_ref(a), &0);
+        assert_eq!(arena.lookup_ref(b), &1);
+        assert_eq!(arena.lookup_ref(c), &2);
+        assert_eq!(arena.lookup_ref(d), &3);
+
+        let f = arena.intern_mut(6);
+        let g = arena.intern_mut(7);
+
+        assert_eq!(arena.len(), 6);
+        assert_eq!(arena.lookup_ref(a), &0);
+        assert_eq!(arena.lookup_ref(b), &1);
+        assert_eq!(arena.lookup_ref(c), &2);
+        assert_eq!(arena.lookup_ref(d), &3);
+        assert_eq!(arena.lookup_ref(f), &6);
+        assert_eq!(arena.lookup_ref(g), &7);
     }
 
     #[cfg(feature = "serde")]
