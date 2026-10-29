@@ -43,6 +43,8 @@ mod mapping;
 mod slice;
 mod str;
 
+#[cfg(feature = "serde")]
+use alloc::format;
 #[cfg(not(feature = "sync"))]
 use alloc::vec::Vec;
 #[cfg(feature = "sync")]
@@ -57,7 +59,7 @@ use core::sync::atomic::{self, AtomicUsize};
 #[cfg(feature = "sync")]
 use dashtable::DashTable;
 #[cfg(feature = "sync")]
-use dashtable::MutEntry;
+use dashtable::{Entry, MutEntry};
 #[cfg(feature = "delta")]
 pub use delta::{Accumulator, DeltaEncoding};
 #[cfg(feature = "get-size2")]
@@ -74,6 +76,8 @@ pub use mapping::{RetainBuilder, RetainSliceBuilder, RetainStrBuilder};
 use postcard_schema::Schema;
 #[cfg(feature = "postcard-schema")]
 use postcard_schema::schema::{DataModelType, NamedType};
+#[cfg(feature = "serde")]
+use serde::de::Error;
 #[cfg(feature = "serde")]
 use serde::de::{DeserializeSeed, SeqAccess, Visitor};
 #[cfg(feature = "serde")]
@@ -302,15 +306,40 @@ where
 impl<T: ?Sized, Storage, H, I> Arena<T, Storage, H, I>
 where
     H: Default,
+    I: Index,
 {
     /// Creates a new arena with pre-allocated space to store at least `len`
     /// values of type `T`.
+    ///
+    /// # Panics
+    ///
+    /// This function panics if the capacity exceeds the maximum allocation size
+    /// for an arena indexed by `I`. Use
+    /// [`try_with_capacity`](Self::try_with_capacity) for a fallible API.
     pub fn with_capacity(len: usize) -> Self {
-        Self {
+        match Self::try_with_capacity(len) {
+            Some(x) => x,
+            None => panic!(
+                "Cannot allocate an Arena with capacity {len} with indices up to {}",
+                I::MAX.to_usize()
+            ),
+        }
+    }
+
+    /// Creates a new arena with pre-allocated space to store at least `len`
+    /// values of type `T`.
+    ///
+    /// This returns [`None`] if the capacity exceeds the maximum allocation
+    /// size for an arena indexed by `I`.
+    pub fn try_with_capacity(len: usize) -> Option<Self> {
+        if len != 0 && len - 1 > I::MAX.to_usize() {
+            return None;
+        }
+        Some(Self {
             #[cfg(not(feature = "sync"))]
             vec: Vec::with_capacity(len),
             #[cfg(feature = "sync")]
-            vec: AppendVec::with_capacity(len),
+            vec: AppendVec::try_with_capacity(len)?,
             #[cfg(not(feature = "sync"))]
             map: HashTable::with_capacity(len),
             #[cfg(feature = "sync")]
@@ -319,7 +348,7 @@ where
             #[cfg(feature = "debug")]
             references: AtomicUsize::new(0),
             _phantom: PhantomData,
-        }
+        })
     }
 }
 
@@ -435,8 +464,25 @@ where
     ///
     /// Calling this function multiple times with the same value doesn't violate
     /// safety, but the value will be stored multiple times in the arena.
+    ///
+    /// # Panics
+    ///
+    /// This function panics if the arena is full (based on the index type `I`).
+    /// Use [`try_push_mut`](Self::try_push_mut) for a fallible API.
     pub fn push_mut(&mut self, value: Storage) -> I {
         self.push(value)
+    }
+
+    /// Unconditionally push a value, without validating that it's already
+    /// interned.
+    ///
+    /// Calling this function multiple times with the same value doesn't violate
+    /// safety, but the value will be stored multiple times in the arena.
+    ///
+    /// This returns [`None`] if the arena is full (based on the index type
+    /// `I`).
+    pub fn try_push_mut(&mut self, value: Storage) -> Option<I> {
+        self.try_push(value)
     }
 }
 
@@ -555,27 +601,54 @@ where
     ///
     /// See also [`intern_mut()`](Self::intern_mut), which is more efficient if
     /// you hold a mutable reference to this arena as it avoids acquiring locks.
+    ///
+    /// # Panics
+    ///
+    /// This function panics if the arena is full (based on the index type `I`).
+    /// Use [`try_intern()`](Self::try_intern) for a fallible API.
     #[cfg(feature = "sync")]
     pub fn intern(&self, value: impl Borrow<T> + Into<Storage>) -> Interned<T, Storage, H, I> {
+        match self.try_intern(value) {
+            Some(x) => x,
+            None => panic!("Cannot intern in a full Arena"),
+        }
+    }
+
+    /// Interns the given value in this arena.
+    ///
+    /// If the value was already interned in this arena, it will simply be
+    /// borrowed to retrieve its interning index. Otherwise it will then be
+    /// converted to store it into the arena.
+    ///
+    /// This returns [`None`] if the arena is full (based on the index type
+    /// `I`).
+    ///
+    /// See also [`try_intern_mut()`](Self::try_intern_mut), which is more
+    /// efficient if you hold a mutable reference to this arena as it avoids
+    /// acquiring locks.
+    #[cfg(feature = "sync")]
+    pub fn try_intern(
+        &self,
+        value: impl Borrow<T> + Into<Storage>,
+    ) -> Option<Interned<T, Storage, H, I>> {
+        let hash = self.hasher.hash_one(value.borrow());
+        let entry = self.map.entry(
+            hash,
+            |&i| self.vec[i.to_usize()].borrow() == value.borrow(),
+            |&i| self.hasher.hash_one(self.vec[i.to_usize()].borrow()),
+        );
+        let id = match entry {
+            Entry::Occupied(e) => *e.get(),
+            Entry::Vacant(e) => {
+                let x: Storage = value.into();
+                let id = self.vec.try_push(x, I::MAX.to_usize())?;
+                *e.insert(I::from_usize(id)).get()
+            }
+        };
+
         #[cfg(feature = "debug")]
         self.references.fetch_add(1, atomic::Ordering::Relaxed);
-
-        let hash = self.hasher.hash_one(value.borrow());
-        let id = *self
-            .map
-            .entry(
-                hash,
-                |&i| self.vec[i.to_usize()].borrow() == value.borrow(),
-                |&i| self.hasher.hash_one(self.vec[i.to_usize()].borrow()),
-            )
-            .or_insert_with(|| {
-                let x: Storage = value.into();
-                let id = self.vec.push(x);
-                assert!(id <= I::MAX.to_usize());
-                I::from_usize(id)
-            })
-            .get();
-        Interned::new(id)
+        Some(Interned::new(id))
     }
 
     /// Interns the given value in this arena.
@@ -587,44 +660,80 @@ where
     /// Contrary to [`intern()`](Self::intern), no locks are held internally
     /// because this function already takes an exclusive mutable reference to
     /// this arena.
+    ///
+    /// # Panics
+    ///
+    /// This function panics if the arena is full (based on the index type `I`).
+    /// Use [`try_intern_mut()`](Self::try_intern_mut) for a fallible API.
     pub fn intern_mut(
         &mut self,
         value: impl Borrow<T> + Into<Storage>,
     ) -> Interned<T, Storage, H, I> {
+        match self.try_intern_mut(value) {
+            Some(x) => x,
+            None => panic!("Cannot intern in a full Arena"),
+        }
+    }
+
+    /// Interns the given value in this arena.
+    ///
+    /// If the value was already interned in this arena, it will simply be
+    /// borrowed to retrieve its interning index. Otherwise it will then be
+    /// converted to store it into the arena.
+    ///
+    /// This returns [`None`] if the arena is full (based on the index type
+    /// `I`).
+    ///
+    /// Contrary to [`try_intern()`](Self::try_intern), no locks are held
+    /// internally because this function already takes an exclusive mutable
+    /// reference to this arena.
+    pub fn try_intern_mut(
+        &mut self,
+        value: impl Borrow<T> + Into<Storage>,
+    ) -> Option<Interned<T, Storage, H, I>> {
+        let hash = self.hasher.hash_one(value.borrow());
+        #[cfg(not(feature = "sync"))]
+        let id = {
+            let entry = self.map.entry(
+                hash,
+                |&i| self.vec[i.to_usize()].borrow() == value.borrow(),
+                |&i| self.hasher.hash_one(self.vec[i.to_usize()].borrow()),
+            );
+            match entry {
+                Entry::Occupied(e) => *e.get(),
+                Entry::Vacant(e) => {
+                    let id = self.vec.len();
+                    if id > I::MAX.to_usize() {
+                        return None;
+                    }
+                    let x: Storage = value.into();
+                    self.vec.push(x);
+                    *e.insert(I::from_usize(id)).get()
+                }
+            }
+        };
+        #[cfg(feature = "sync")]
+        let id = {
+            let entry = self.map.entry_mut(
+                hash,
+                |&i| self.vec[i.to_usize()].borrow() == value.borrow(),
+                |&i| self.hasher.hash_one(self.vec[i.to_usize()].borrow()),
+            );
+            match entry {
+                MutEntry::Occupied(e) => *e.get(),
+                MutEntry::Vacant(e) => {
+                    let x: Storage = value.into();
+                    let id = self.vec.try_push_mut(x, I::MAX.to_usize())?;
+                    *e.insert(I::from_usize(id)).get()
+                }
+            }
+        };
+
         #[cfg(feature = "debug")]
         {
             *self.references.get_mut() += 1;
         }
-
-        let hash = self.hasher.hash_one(value.borrow());
-        #[cfg(not(feature = "sync"))]
-        let entry = self.map.entry(
-            hash,
-            |&i| self.vec[i.to_usize()].borrow() == value.borrow(),
-            |&i| self.hasher.hash_one(self.vec[i.to_usize()].borrow()),
-        );
-        #[cfg(feature = "sync")]
-        let entry = self.map.entry_mut(
-            hash,
-            |&i| self.vec[i.to_usize()].borrow() == value.borrow(),
-            |&i| self.hasher.hash_one(self.vec[i.to_usize()].borrow()),
-        );
-        let id = *entry
-            .or_insert_with(|| {
-                let x: Storage = value.into();
-                #[cfg(not(feature = "sync"))]
-                let id = {
-                    let id = self.vec.len();
-                    self.vec.push(x);
-                    id
-                };
-                #[cfg(feature = "sync")]
-                let id = self.vec.push_mut(x);
-                assert!(id <= I::MAX.to_usize());
-                I::from_usize(id)
-            })
-            .get();
-        Interned::new(id)
+        Some(Interned::new(id))
     }
 
     /// Unconditionally push a value, without validating that it's already
@@ -632,34 +741,57 @@ where
     ///
     /// Calling this function multiple times with the same value doesn't violate
     /// safety, but the value will be stored multiple times in the arena.
+    ///
+    /// # Panics
+    ///
+    /// This function panics if the arena is full (based on the index type `I`).
+    /// Use [`try_push()`](Self::try_push) for a fallible API.
     pub(crate) fn push(&mut self, value: Storage) -> I {
-        #[cfg(feature = "debug")]
-        {
-            *self.references.get_mut() += 1;
+        match self.try_push(value) {
+            Some(x) => x,
+            None => panic!("Cannot intern in a full Arena"),
         }
+    }
 
+    /// Unconditionally push a value, without validating that it's already
+    /// interned.
+    ///
+    /// Calling this function multiple times with the same value doesn't violate
+    /// safety, but the value will be stored multiple times in the arena.
+    ///
+    /// This returns [`None`] if the arena is full (based on the index type
+    /// `I`).
+    pub(crate) fn try_push(&mut self, value: Storage) -> Option<I> {
         let hash = self.hasher.hash_one(value.borrow());
 
         #[cfg(not(feature = "sync"))]
         let id = {
             let id = self.vec.len();
+            if id > I::MAX.to_usize() {
+                return None;
+            }
             self.vec.push(value);
+            let id = I::from_usize(id);
+            self.map.insert_unique(hash, id, |&i| {
+                self.hasher.hash_one(self.vec[i.to_usize()].borrow())
+            });
             id
         };
         #[cfg(feature = "sync")]
-        let id = self.vec.push_mut(value);
-        assert!(id <= I::MAX.to_usize());
-        let id = I::from_usize(id);
+        let id = {
+            let id = self.vec.try_push_mut(value, I::MAX.to_usize())?;
+            let id = I::from_usize(id);
+            self.map.insert_unique_mut(hash, id, |&i| {
+                self.hasher.hash_one(self.vec[i.to_usize()].borrow())
+            });
+            id
+        };
 
-        #[cfg(not(feature = "sync"))]
-        self.map.insert_unique(hash, id, |&i| {
-            self.hasher.hash_one(self.vec[i.to_usize()].borrow())
-        });
-        #[cfg(feature = "sync")]
-        self.map.insert_unique_mut(hash, id, |&i| {
-            self.hasher.hash_one(self.vec[i.to_usize()].borrow())
-        });
-        id
+        #[cfg(feature = "debug")]
+        {
+            *self.references.get_mut() += 1;
+        }
+        Some(id)
     }
 }
 
@@ -676,8 +808,35 @@ where
     ///
     /// See also [`lookup_ref()`](Self::lookup_ref) if you only need a
     /// reference.
+    ///
+    /// # Panics
+    ///
+    /// This function panics if the interned handle is out of bounds for this
+    /// arena, for example because the arena was truncated, or because the
+    /// interned handle was deserialized from untrusted data. Use
+    /// [`try_lookup`](Self::try_lookup) for a fallible API.
     pub fn lookup(&self, interned: Interned<T, Storage, H, I>) -> Storage {
         self.vec[interned.id.to_usize()].clone()
+    }
+
+    /// Retrieves the given [`Interned`] value from this arena.
+    ///
+    /// The caller is responsible for ensuring that the same arena was used to
+    /// intern this value, otherwise an arbitrary value will be returned.
+    ///
+    /// This returns [`None`] if the interned handle is out of bounds for this
+    /// arena, for example because the arena was truncated, or because the
+    /// interned handle was deserialized from untrusted data.
+    ///
+    /// See also [`try_lookup_ref()`](Self::try_lookup_ref) if you only need a
+    /// reference.
+    pub fn try_lookup(&self, interned: Interned<T, Storage, H, I>) -> Option<Storage> {
+        let i = interned.id.to_usize();
+        #[cfg(not(feature = "sync"))]
+        let value = self.vec.get(i)?;
+        #[cfg(feature = "sync")]
+        let value = self.vec.try_index(i)?;
+        Some(value.clone())
     }
 }
 
@@ -693,8 +852,34 @@ where
     /// a panic will happen.
     ///
     /// See also [`lookup()`](Self::lookup) if you need an owned value.
+    ///
+    /// # Panics
+    ///
+    /// This function panics if the interned handle is out of bounds for this
+    /// arena, for example because the arena was truncated, or because the
+    /// interned handle was deserialized from untrusted data. Use
+    /// [`try_lookup_ref`](Self::try_lookup_ref) for a fallible API.
     pub fn lookup_ref(&self, interned: Interned<T, Storage, H, I>) -> &T {
         self.vec[interned.id.to_usize()].borrow()
+    }
+
+    /// Retrieves a reference to the given [`Interned`] value from this arena.
+    ///
+    /// The caller is responsible for ensuring that the same arena was used to
+    /// intern this value, otherwise an arbitrary value will be returned.
+    ///
+    /// This returns [`None`] if the interned handle is out of bounds for this
+    /// arena, for example because the arena was truncated, or because the
+    /// interned handle was deserialized from untrusted data.
+    ///
+    /// See also [`try_lookup()`](Self::try_lookup) if you need an owned value.
+    pub fn try_lookup_ref(&self, interned: Interned<T, Storage, H, I>) -> Option<&T> {
+        let i = interned.id.to_usize();
+        #[cfg(not(feature = "sync"))]
+        let value = self.vec.get(i)?;
+        #[cfg(feature = "sync")]
+        let value = self.vec.try_index(i)?;
+        Some(value.borrow())
     }
 }
 
@@ -816,11 +1001,17 @@ where
     {
         let mut arena = match seq.size_hint() {
             None => Arena::default(),
-            Some(size_hint) => Arena::with_capacity(size_hint),
+            Some(size_hint) => Arena::try_with_capacity(size_hint).ok_or_else(|| {
+                Error::custom(format!(
+                    "Cannot create an Arena with capacity for {size_hint} values"
+                ))
+            })?,
         };
 
         while let Some(t) = seq.next_element()? {
-            arena.push(t);
+            arena.try_push(t).ok_or(Error::custom(
+                "Arena is full, cannot push more values to it",
+            ))?;
         }
 
         Ok(arena)
@@ -996,7 +1187,9 @@ where
         A: SeqAccess<'de>,
     {
         while let Some(t) = seq.next_element()? {
-            self.arena.push(t);
+            self.arena.try_push(t).ok_or(Error::custom(
+                "Arena is full, cannot push more values to it",
+            ))?;
         }
         Ok(())
     }

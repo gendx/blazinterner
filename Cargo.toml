@@ -28,7 +28,7 @@ std = []
 sync = ["dep:appendvec", "dep:dashtable"]
 
 [dependencies]
-appendvec = { optional = true, version = "0.2.0" }
+appendvec = { optional = true, version = "0.2.1" }
 bit-set = { optional = true, version = "0.11.1", default-features = false }
 dashtable = { optional = true, version = "0.2.1" }
 either = { version = "1.19.0", default-features = false }

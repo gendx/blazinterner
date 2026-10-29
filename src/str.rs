@@ -1,6 +1,8 @@
 use crate::{CopyRange, DefaultBuildHasher, Index};
 #[cfg(feature = "serde")]
 use crate::{RangeWrapper, SnapshotRangeWrapper};
+#[cfg(feature = "serde")]
+use alloc::format;
 #[cfg(any(feature = "serde", not(feature = "sync")))]
 use alloc::string::String;
 #[cfg(any(feature = "serde", not(feature = "sync")))]
@@ -16,7 +18,7 @@ use core::sync::atomic::{self, AtomicUsize};
 #[cfg(feature = "sync")]
 use dashtable::DashTable;
 #[cfg(feature = "sync")]
-use dashtable::MutEntry;
+use dashtable::{Entry, MutEntry};
 #[cfg(feature = "get-size2")]
 use get_size2::{GetSize, GetSizeTracker};
 #[cfg(not(feature = "sync"))]
@@ -200,10 +202,33 @@ impl<I: Index> RangeVecStr<I> {
         return self.vec.get_bytes(range);
     }
 
+    fn try_lookup_bytes(&self, id: I) -> Option<&[u8]> {
+        let i = id.to_usize();
+        #[cfg(not(feature = "sync"))]
+        let range = self.ranges.get(i)?;
+        #[cfg(feature = "sync")]
+        let range = self.ranges.try_index(i)?;
+        let range = range.start.to_usize()..range.end.to_usize();
+        #[cfg(not(feature = "sync"))]
+        return Some(&self.vec.as_bytes()[range]);
+        #[cfg(feature = "sync")]
+        return Some(self.vec.get_bytes(range));
+    }
+
     fn lookup_str(&self, id: I) -> &str {
         let range = self.ranges[id.to_usize()];
         let range = range.start.to_usize()..range.end.to_usize();
         &self.vec[range]
+    }
+
+    fn try_lookup_str(&self, id: I) -> Option<&str> {
+        let i = id.to_usize();
+        #[cfg(not(feature = "sync"))]
+        let range = self.ranges.get(i)?;
+        #[cfg(feature = "sync")]
+        let range = self.ranges.try_index(i)?;
+        let range = range.start.to_usize()..range.end.to_usize();
+        Some(&self.vec[range])
     }
 
     fn iter(&self) -> impl ExactSizeIterator<Item = &str> {
@@ -226,41 +251,50 @@ impl<I: Index> RangeVecStr<I> {
     }
 
     #[cfg(feature = "sync")]
-    fn push_str(&self, value: &str) -> I {
-        let range = self.vec.push_str(value);
-        assert!(range.start <= I::MAX.to_usize());
-        assert!(range.end <= I::MAX.to_usize());
+    fn try_push_str(&self, value: &str) -> Option<I> {
+        let range = self.vec.try_push_str(value, I::MAX.to_usize())?;
         let range = I::from_usize(range.start)..I::from_usize(range.end);
 
-        let id = self.ranges.push(range.into());
-        assert!(id <= I::MAX.to_usize());
-        I::from_usize(id)
+        let id = self.ranges.try_push(range.into(), I::MAX.to_usize())?;
+        Some(I::from_usize(id))
     }
 
-    fn push_str_mut(&mut self, value: &str) -> I {
+    fn try_push_str_mut(&mut self, value: &str) -> Option<I> {
         #[cfg(not(feature = "sync"))]
         let range = {
             let start = self.vec.len();
+            Self::check_slice_limit(start, value.len())?;
             self.vec.push_str(value);
             let end = self.vec.len();
             start..end
         };
         #[cfg(feature = "sync")]
-        let range = self.vec.push_str_mut(value);
-        assert!(range.start <= I::MAX.to_usize());
-        assert!(range.end <= I::MAX.to_usize());
+        let range = self.vec.try_push_str_mut(value, I::MAX.to_usize())?;
         let range = I::from_usize(range.start)..I::from_usize(range.end);
 
         #[cfg(not(feature = "sync"))]
         let id = {
             let id = self.ranges.len();
+            if id > I::MAX.to_usize() {
+                return None;
+            }
             self.ranges.push(range.into());
             id
         };
         #[cfg(feature = "sync")]
-        let id = self.ranges.push_mut(range.into());
-        assert!(id <= I::MAX.to_usize());
-        I::from_usize(id)
+        let id = self.ranges.try_push_mut(range.into(), I::MAX.to_usize())?;
+        Some(I::from_usize(id))
+    }
+
+    #[cfg(not(feature = "sync"))]
+    #[inline(always)]
+    fn check_slice_limit(start: usize, len: usize) -> Option<()> {
+        let limit = I::MAX.to_usize();
+        if len > limit || start > limit - len {
+            None
+        } else {
+            Some(())
+        }
     }
 
     fn truncate(&mut self, len: usize) {
@@ -305,11 +339,36 @@ where
 impl<H, I> ArenaStr<H, I>
 where
     H: Default,
+    I: Index,
 {
     /// Creates a new arena with pre-allocated space to store at least the given
     /// number of strings, totalling the given number of bytes.
+    ///
+    /// # Panics
+    ///
+    /// This function panics if the capacity exceeds the maximum allocation size
+    /// for an arena indexed by `I`. Use
+    /// [`try_with_capacity`](Self::try_with_capacity) for a fallible API.
     pub fn with_capacity(strings: usize, bytes: usize) -> Self {
-        Self {
+        match Self::try_with_capacity(strings, bytes) {
+            Some(x) => x,
+            None => panic!(
+                "Cannot allocate an ArenaStr with capacity for {strings} strings of {bytes} bytes with indices up to {}",
+                I::MAX.to_usize()
+            ),
+        }
+    }
+
+    /// Creates a new arena with pre-allocated space to store at least the given
+    /// number of strings, totalling the given number of bytes.
+    ///
+    /// This returns [`None`] if the capacity exceeds the maximum allocation
+    /// size for an arena indexed by `I`.
+    pub fn try_with_capacity(strings: usize, bytes: usize) -> Option<Self> {
+        if (strings != 0 && strings - 1 > I::MAX.to_usize()) || bytes > I::MAX.to_usize() {
+            return None;
+        }
+        Some(Self {
             #[cfg(not(feature = "sync"))]
             rangevec: RangeVecStr {
                 vec: String::with_capacity(bytes),
@@ -317,8 +376,8 @@ where
             },
             #[cfg(feature = "sync")]
             rangevec: RangeVecStr {
-                vec: AppendStr::with_capacity(bytes),
-                ranges: AppendVec::with_capacity(strings),
+                vec: AppendStr::try_with_capacity(bytes)?,
+                ranges: AppendVec::try_with_capacity(strings)?,
             },
             #[cfg(not(feature = "sync"))]
             map: HashTable::with_capacity(strings),
@@ -327,7 +386,7 @@ where
             hasher: H::default(),
             #[cfg(feature = "debug")]
             references: AtomicUsize::new(0),
-        }
+        })
     }
 }
 
@@ -561,22 +620,49 @@ where
     ///
     /// See also [`intern_mut()`](Self::intern_mut), which is more efficient if
     /// you hold a mutable reference to this arena as it avoids acquiring locks.
+    ///
+    /// # Panics
+    ///
+    /// This function panics if the arena is full (based on the index type `I`).
+    /// Use [`try_intern()`](Self::try_intern) for a fallible API.
     #[cfg(feature = "sync")]
     pub fn intern(&self, value: &str) -> InternedStr<H, I> {
+        match self.try_intern(value) {
+            Some(x) => x,
+            None => panic!("Cannot intern in a full ArenaStr"),
+        }
+    }
+
+    /// Interns the given value in this arena.
+    ///
+    /// If the value was already interned in this arena, its interning index
+    /// will simply be returned. Otherwise it will be stored into the arena.
+    ///
+    /// This returns [`None`] if the arena is full (based on the index type
+    /// `I`).
+    ///
+    /// See also [`try_intern_mut()`](Self::try_intern_mut), which is more
+    /// efficient if you hold a mutable reference to this arena as it avoids
+    /// acquiring locks.
+    #[cfg(feature = "sync")]
+    pub fn try_intern(&self, value: &str) -> Option<InternedStr<H, I>> {
+        let hash = self.hasher.hash_one(value);
+        let entry = self.map.entry(
+            hash,
+            |&i| self.lookup_str(i) == value,
+            |&i| self.hasher.hash_one(self.lookup_str(i)),
+        );
+        let id = match entry {
+            Entry::Occupied(e) => *e.get(),
+            Entry::Vacant(e) => {
+                let id = self.rangevec.try_push_str(value)?;
+                *e.insert(id).get()
+            }
+        };
+
         #[cfg(feature = "debug")]
         self.references.fetch_add(1, atomic::Ordering::Relaxed);
-
-        let hash = self.hasher.hash_one(value);
-        let id = *self
-            .map
-            .entry(
-                hash,
-                |&i| self.lookup_str(i) == value,
-                |&i| self.hasher.hash_one(self.lookup_str(i)),
-            )
-            .or_insert_with(|| self.rangevec.push_str(value))
-            .get();
-        InternedStr::new(id)
+        Some(InternedStr::new(id))
     }
 
     /// Interns the given value in this arena.
@@ -587,29 +673,67 @@ where
     /// Contrary to [`intern()`](Self::intern), no locks are held internally
     /// because this function already takes an exclusive mutable reference to
     /// this arena.
+    ///
+    /// # Panics
+    ///
+    /// This function panics if the arena is full (based on the index type `I`).
+    /// Use [`try_intern_mut()`](Self::try_intern_mut) for a fallible API.
     pub fn intern_mut(&mut self, value: &str) -> InternedStr<H, I> {
+        match self.try_intern_mut(value) {
+            Some(x) => x,
+            None => panic!("Cannot intern in a full ArenaStr"),
+        }
+    }
+
+    /// Interns the given value in this arena.
+    ///
+    /// If the value was already interned in this arena, its interning index
+    /// will simply be returned. Otherwise it will be stored into the arena.
+    ///
+    /// This returns [`None`] if the arena is full (based on the index type
+    /// `I`).
+    ///
+    /// Contrary to [`try_intern()`](Self::try_intern), no locks are held
+    /// internally because this function already takes an exclusive mutable
+    /// reference to this arena.
+    pub fn try_intern_mut(&mut self, value: &str) -> Option<InternedStr<H, I>> {
+        let hash = self.hasher.hash_one(value);
+        #[cfg(not(feature = "sync"))]
+        let id = {
+            let entry = self.map.entry(
+                hash,
+                |&i| self.rangevec.lookup_str(i) == value,
+                |&i| self.hasher.hash_one(self.rangevec.lookup_str(i)),
+            );
+            match entry {
+                Entry::Occupied(e) => *e.get(),
+                Entry::Vacant(e) => {
+                    let id = self.rangevec.try_push_str_mut(value)?;
+                    *e.insert(id).get()
+                }
+            }
+        };
+        #[cfg(feature = "sync")]
+        let id = {
+            let entry = self.map.entry_mut(
+                hash,
+                |&i| self.rangevec.lookup_str(i) == value,
+                |&i| self.hasher.hash_one(self.rangevec.lookup_str(i)),
+            );
+            match entry {
+                MutEntry::Occupied(e) => *e.get(),
+                MutEntry::Vacant(e) => {
+                    let id = self.rangevec.try_push_str_mut(value)?;
+                    *e.insert(id).get()
+                }
+            }
+        };
+
         #[cfg(feature = "debug")]
         {
             *self.references.get_mut() += 1;
         }
-
-        let hash = self.hasher.hash_one(value);
-        #[cfg(not(feature = "sync"))]
-        let entry = self.map.entry(
-            hash,
-            |&i| self.rangevec.lookup_str(i) == value,
-            |&i| self.hasher.hash_one(self.rangevec.lookup_str(i)),
-        );
-        #[cfg(feature = "sync")]
-        let entry = self.map.entry_mut(
-            hash,
-            |&i| self.rangevec.lookup_str(i) == value,
-            |&i| self.hasher.hash_one(self.rangevec.lookup_str(i)),
-        );
-        let id = *entry
-            .or_insert_with(|| self.rangevec.push_str_mut(value))
-            .get();
-        InternedStr::new(id)
+        Some(InternedStr::new(id))
     }
 
     /// Unconditionally push a value, without validating that it's already
@@ -617,14 +741,29 @@ where
     ///
     /// Calling this function multiple times with the same value doesn't violate
     /// safety, but the value will be stored multiple times in the arena.
+    ///
+    /// # Panics
+    ///
+    /// This function panics if the arena is full (based on the index type `I`).
+    /// Use [`try_push()`](Self::try_push) for a fallible API.
     pub(crate) fn push(&mut self, value: &str) -> I {
-        #[cfg(feature = "debug")]
-        {
-            *self.references.get_mut() += 1;
+        match self.try_push(value) {
+            Some(x) => x,
+            None => panic!("Cannot intern in a full ArenaStr"),
         }
+    }
 
+    /// Unconditionally push a value, without validating that it's already
+    /// interned.
+    ///
+    /// Calling this function multiple times with the same value doesn't violate
+    /// safety, but the value will be stored multiple times in the arena.
+    ///
+    /// This returns [`None`] if the arena is full (based on the index type
+    /// `I`).
+    pub(crate) fn try_push(&mut self, value: &str) -> Option<I> {
         let hash = self.hasher.hash_one(value);
-        let id = self.rangevec.push_str_mut(value);
+        let id = self.rangevec.try_push_str_mut(value)?;
         #[cfg(not(feature = "sync"))]
         self.map.insert_unique(hash, id, |&i| {
             self.hasher.hash_one(self.rangevec.lookup_str(i))
@@ -633,7 +772,12 @@ where
         self.map.insert_unique_mut(hash, id, |&i| {
             self.hasher.hash_one(self.rangevec.lookup_str(i))
         });
-        id
+
+        #[cfg(feature = "debug")]
+        {
+            *self.references.get_mut() += 1;
+        }
+        Some(id)
     }
 }
 
@@ -646,8 +790,30 @@ impl<H, I: Index> ArenaStr<H, I> {
     ///
     /// If you only need to access the bytes,
     /// [`lookup_bytes()`](Self::lookup_bytes) may be more efficient.
+    ///
+    /// # Panics
+    ///
+    /// This function panics if the interned handle is out of bounds for this
+    /// arena, for example because the arena was truncated, or because the
+    /// interned handle was deserialized from untrusted data. Use
+    /// [`try_lookup`](Self::try_lookup) for a fallible API.
     pub fn lookup(&self, interned: InternedStr<H, I>) -> &str {
         self.lookup_str(interned.id)
+    }
+
+    /// Retrieves the given [`InternedStr`] value from this arena.
+    ///
+    /// The caller is responsible for ensuring that the same arena was used to
+    /// intern this value, otherwise an arbitrary value will be returned.
+    ///
+    /// This returns [`None`] if the interned handle is out of bounds for this
+    /// arena, for example because the arena was truncated, or because the
+    /// interned handle was deserialized from untrusted data.
+    ///
+    /// If you only need to access the bytes,
+    /// [`try_lookup_bytes()`](Self::try_lookup_bytes) may be more efficient.
+    pub fn try_lookup(&self, interned: InternedStr<H, I>) -> Option<&str> {
+        self.rangevec.try_lookup_str(interned.id)
     }
 
     /// Retrieves the bytes for the given [`InternedStr`] value from this arena.
@@ -655,8 +821,27 @@ impl<H, I: Index> ArenaStr<H, I> {
     /// The caller is responsible for ensuring that the same arena was used to
     /// intern this value, otherwise an arbitrary value will be returned or
     /// a panic will happen.
+    ///
+    /// # Panics
+    ///
+    /// This function panics if the interned handle is out of bounds for this
+    /// arena, for example because the arena was truncated, or because the
+    /// interned handle was deserialized from untrusted data. Use
+    /// [`try_lookup_bytes`](Self::try_lookup_bytes) for a fallible API.
     pub fn lookup_bytes(&self, interned: InternedStr<H, I>) -> &[u8] {
         self.rangevec.lookup_bytes(interned.id)
+    }
+
+    /// Retrieves the bytes for the given [`InternedStr`] value from this arena.
+    ///
+    /// The caller is responsible for ensuring that the same arena was used to
+    /// intern this value, otherwise an arbitrary value will be returned.
+    ///
+    /// This returns [`None`] if the interned handle is out of bounds for this
+    /// arena, for example because the arena was truncated, or because the
+    /// interned handle was deserialized from untrusted data.
+    pub fn try_lookup_bytes(&self, interned: InternedStr<H, I>) -> Option<&[u8]> {
+        self.rangevec.try_lookup_bytes(interned.id)
     }
 
     fn lookup_str(&self, id: I) -> &str {
@@ -827,12 +1012,23 @@ where
             .next_element()?
             .ok_or_else(|| A::Error::invalid_length(1, &self))?;
 
-        let mut arena = ArenaStr::with_capacity(sizes.len(), string.0.len());
+        let mut arena =
+            ArenaStr::try_with_capacity(sizes.len(), string.0.len()).ok_or_else(|| {
+                Error::custom(format!(
+                    "Cannot create an ArenaStr with capacity for {} strings of {} bytes",
+                    sizes.len(),
+                    string.0.len()
+                ))
+            })?;
 
         let mut start = 0;
         for size in sizes {
             let size = size.to_usize();
-            arena.push(&string.0[start..start + size]);
+            arena
+                .try_push(&string.0[start..start + size])
+                .ok_or(Error::custom(
+                    "ArenaStr is full, cannot push more values to it",
+                ))?;
             start += size;
         }
 
@@ -1043,7 +1239,11 @@ where
         let mut start = 0;
         for size in sizes {
             let size = size.to_usize();
-            self.arena.push(&string.0[start..start + size]);
+            self.arena
+                .try_push(&string.0[start..start + size])
+                .ok_or(Error::custom(
+                    "ArenaStr is full, cannot push more values to it",
+                ))?;
             start += size;
         }
 
@@ -1192,7 +1392,14 @@ mod delta {
                 .next_element()?
                 .ok_or_else(|| A::Error::invalid_length(1, &self))?;
 
-            let mut arena = ArenaStr::with_capacity(sizes.len(), bytes.0.len());
+            let mut arena =
+                ArenaStr::try_with_capacity(sizes.len(), bytes.0.len()).ok_or_else(|| {
+                    Error::custom(format!(
+                        "Cannot create an ArenaStr with capacity for {} strings of {} bytes",
+                        sizes.len(),
+                        bytes.0.len()
+                    ))
+                })?;
 
             let mut acc = Accum::default();
             let mut start = 0;
@@ -1205,7 +1412,9 @@ mod delta {
                     string.len(),
                     "Invalid Accumulator implementation for DeltaEncoding of ArenaSlice: delta length must match destination string length (in bytes)"
                 );
-                arena.push(&string);
+                arena.try_push(&string).ok_or(Error::custom(
+                    "ArenaStr is full, cannot push more values to it",
+                ))?;
                 start += size;
             }
 

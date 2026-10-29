@@ -1,4 +1,6 @@
 use crate::{DefaultBuildHasher, Index};
+#[cfg(feature = "serde")]
+use alloc::format;
 use alloc::vec::Vec;
 #[cfg(feature = "sync")]
 use appendvec::AppendVec;
@@ -15,7 +17,7 @@ use core::sync::atomic::{self, AtomicUsize};
 #[cfg(feature = "sync")]
 use dashtable::DashTable;
 #[cfg(feature = "sync")]
-use dashtable::MutEntry;
+use dashtable::{Entry, MutEntry};
 #[cfg(feature = "get-size2")]
 use get_size2::{GetSize, GetSizeTracker};
 #[cfg(not(feature = "sync"))]
@@ -215,6 +217,16 @@ impl<T, I: Index> RangeVec<T, I> {
         &self.vec[range]
     }
 
+    fn try_lookup_slice(&self, id: I) -> Option<&[T]> {
+        let i = id.to_usize();
+        #[cfg(not(feature = "sync"))]
+        let range = self.ranges.get(i)?;
+        #[cfg(feature = "sync")]
+        let range = self.ranges.try_index(i)?;
+        let range = range.start.to_usize()..range.end.to_usize();
+        Some(&self.vec[range])
+    }
+
     fn iter(&self) -> impl ExactSizeIterator<Item = &[T]> {
         self.ranges
             .iter()
@@ -222,17 +234,16 @@ impl<T, I: Index> RangeVec<T, I> {
     }
 
     #[cfg(feature = "sync")]
-    fn push_range(&self, range: Range<usize>) -> I {
+    fn try_push_range(&self, range: Range<usize>) -> Option<I> {
         assert!(range.start <= I::MAX.to_usize());
         assert!(range.end <= I::MAX.to_usize());
         let range = I::from_usize(range.start)..I::from_usize(range.end);
 
-        let id = self.ranges.push(range.into());
-        assert!(id <= I::MAX.to_usize());
-        I::from_usize(id)
+        let id = self.ranges.try_push(range.into(), I::MAX.to_usize())?;
+        Some(I::from_usize(id))
     }
 
-    fn push_range_mut(&mut self, range: Range<usize>) -> I {
+    fn try_push_range_mut(&mut self, range: Range<usize>) -> Option<I> {
         assert!(range.start <= I::MAX.to_usize());
         assert!(range.end <= I::MAX.to_usize());
         let range = I::from_usize(range.start)..I::from_usize(range.end);
@@ -240,13 +251,15 @@ impl<T, I: Index> RangeVec<T, I> {
         #[cfg(not(feature = "sync"))]
         let id = {
             let id = self.ranges.len();
+            if id > I::MAX.to_usize() {
+                return None;
+            }
             self.ranges.push(range.into());
             id
         };
         #[cfg(feature = "sync")]
-        let id = self.ranges.push_mut(range.into());
-        assert!(id <= I::MAX.to_usize());
-        I::from_usize(id)
+        let id = self.ranges.try_push_mut(range.into(), I::MAX.to_usize())?;
+        Some(I::from_usize(id))
     }
 
     fn truncate(&mut self, len: usize) {
@@ -292,11 +305,36 @@ where
 impl<T, H, I> ArenaSlice<T, H, I>
 where
     H: Default,
+    I: Index,
 {
     /// Creates a new arena with pre-allocated space to store at least the given
     /// number of slices, totalling the given number of items of type `T`.
+    ///
+    /// # Panics
+    ///
+    /// This function panics if the capacity exceeds the maximum allocation size
+    /// for an arena indexed by `I`. Use
+    /// [`try_with_capacity`](Self::try_with_capacity) for a fallible API.
     pub fn with_capacity(slices: usize, items: usize) -> Self {
-        Self {
+        match Self::try_with_capacity(slices, items) {
+            Some(x) => x,
+            None => panic!(
+                "Cannot allocate an ArenaSlice with capacity for {slices} slices of {items} items with indices up to {}",
+                I::MAX.to_usize()
+            ),
+        }
+    }
+
+    /// Creates a new arena with pre-allocated space to store at least the given
+    /// number of slices, totalling the given number of items of type `T`.
+    ///
+    /// This returns [`None`] if the capacity exceeds the maximum allocation
+    /// size for an arena indexed by `I`.
+    pub fn try_with_capacity(slices: usize, items: usize) -> Option<Self> {
+        if (slices != 0 && slices - 1 > I::MAX.to_usize()) || items > I::MAX.to_usize() {
+            return None;
+        }
+        Some(Self {
             #[cfg(not(feature = "sync"))]
             rangevec: RangeVec {
                 vec: Vec::with_capacity(items),
@@ -304,8 +342,8 @@ where
             },
             #[cfg(feature = "sync")]
             rangevec: RangeVec {
-                vec: AppendVec::with_capacity(items),
-                ranges: AppendVec::with_capacity(slices),
+                vec: AppendVec::try_with_capacity(items)?,
+                ranges: AppendVec::try_with_capacity(slices)?,
             },
             #[cfg(not(feature = "sync"))]
             map: HashTable::with_capacity(slices),
@@ -314,7 +352,7 @@ where
             hasher: H::default(),
             #[cfg(feature = "debug")]
             references: AtomicUsize::new(0),
-        }
+        })
     }
 }
 
@@ -571,6 +609,124 @@ where
 
 impl<T, H, I> ArenaSlice<T, H, I>
 where
+    I: Index,
+{
+    #[cfg(not(feature = "sync"))]
+    #[inline(always)]
+    fn check_slice_limit(start: usize, len: usize) -> Option<()> {
+        let limit = I::MAX.to_usize();
+        if len > limit || start > limit - len {
+            None
+        } else {
+            Some(())
+        }
+    }
+
+    #[cfg(feature = "sync")]
+    fn try_insert(
+        entry: Entry<'_, I>,
+        rangevec: &RangeVec<T, I>,
+        try_insert: impl FnOnce(&RangeVec<T, I>) -> Option<Range<usize>>,
+    ) -> Option<I> {
+        let id = match entry {
+            Entry::Occupied(e) => *e.get(),
+            Entry::Vacant(e) => {
+                let range = try_insert(rangevec)?;
+                let id = rangevec.try_push_range(range)?;
+                *e.insert(id).get()
+            }
+        };
+        Some(id)
+    }
+
+    #[cfg(not(feature = "sync"))]
+    fn try_insert_mut(
+        entry: Entry<'_, I>,
+        rangevec: &mut RangeVec<T, I>,
+        slice_len: usize,
+        insert: impl FnOnce(&mut RangeVec<T, I>),
+    ) -> Option<I> {
+        let id = match entry {
+            Entry::Occupied(e) => *e.get(),
+            Entry::Vacant(e) => {
+                let range = {
+                    let start = rangevec.vec.len();
+                    Self::check_slice_limit(start, slice_len)?;
+                    insert(rangevec);
+                    let end = rangevec.vec.len();
+                    start..end
+                };
+                let id = rangevec.try_push_range_mut(range)?;
+                *e.insert(id).get()
+            }
+        };
+        Some(id)
+    }
+
+    #[cfg(feature = "sync")]
+    fn try_insert_mut(
+        entry: MutEntry<'_, I>,
+        rangevec: &mut RangeVec<T, I>,
+        try_insert: impl FnOnce(&mut RangeVec<T, I>) -> Option<Range<usize>>,
+    ) -> Option<I> {
+        let id = match entry {
+            MutEntry::Occupied(e) => *e.get(),
+            MutEntry::Vacant(e) => {
+                let range = try_insert(rangevec)?;
+                let id = rangevec.try_push_range_mut(range)?;
+                *e.insert(id).get()
+            }
+        };
+        Some(id)
+    }
+}
+
+impl<T, H, I> ArenaSlice<T, H, I>
+where
+    T: Hash,
+    H: BuildHasher,
+    I: Index,
+{
+    #[cfg(not(feature = "sync"))]
+    fn try_push_mut_(
+        &mut self,
+        slice_len: usize,
+        insert: impl FnOnce(&mut RangeVec<T, I>),
+    ) -> Option<I> {
+        let range = {
+            let start = self.rangevec.vec.len();
+            Self::check_slice_limit(start, slice_len)?;
+            insert(&mut self.rangevec);
+            let end = self.rangevec.vec.len();
+            start..end
+        };
+        let id = self.rangevec.try_push_range_mut(range.clone())?;
+
+        let hash = self.hash_slice(&self.rangevec.vec[range]);
+        self.map.insert_unique(hash, id, |&i| {
+            Self::hash_iter(&self.hasher, self.rangevec.lookup_slice(i))
+        });
+        Some(id)
+    }
+
+    #[cfg(feature = "sync")]
+    fn try_push_mut_(
+        &mut self,
+        try_insert: impl FnOnce(&mut RangeVec<T, I>) -> Option<Range<usize>>,
+    ) -> Option<I> {
+        let range = try_insert(&mut self.rangevec)?;
+        let id = self.rangevec.try_push_range_mut(range.clone())?;
+
+        let hash = self.hash_slice(&self.rangevec.vec[range]);
+        self.map.insert_unique_mut(hash, id, |&i| {
+            Self::hash_iter(&self.hasher, self.rangevec.lookup_slice(i))
+        });
+        Some(id)
+    }
+}
+
+impl<T, H, I> ArenaSlice<T, H, I>
+where
     T: Default + Eq + Hash,
     H: BuildHasher,
     I: Index,
@@ -583,25 +739,45 @@ where
     /// See also [`intern_owned_mut()`](Self::intern_owned_mut), which is more
     /// efficient if you hold a mutable reference to this arena as it avoids
     /// acquiring locks.
+    ///
+    /// # Panics
+    ///
+    /// This function panics if the arena is full (based on the index type `I`).
+    /// Use [`try_intern_owned()`](Self::try_intern_owned) for a fallible API.
     #[cfg(feature = "sync")]
     pub fn intern_owned(&self, value: Vec<T>) -> InternedSlice<T, H, I> {
+        match self.try_intern_owned(value) {
+            Some(x) => x,
+            None => panic!("Cannot intern in a full ArenaSlice"),
+        }
+    }
+
+    /// Interns the given value in this arena.
+    ///
+    /// If the value was already interned in this arena, its interning index
+    /// will simply be returned. Otherwise it will be stored into the arena.
+    ///
+    /// This returns [`None`] if the arena is full (based on the index type
+    /// `I`).
+    ///
+    /// See also [`try_intern_owned_mut()`](Self::try_intern_owned_mut), which
+    /// is more efficient if you hold a mutable reference to this arena as it
+    /// avoids acquiring locks.
+    #[cfg(feature = "sync")]
+    pub fn try_intern_owned(&self, value: Vec<T>) -> Option<InternedSlice<T, H, I>> {
+        let hash = self.hash_slice(&value);
+        let entry = self.map.entry(
+            hash,
+            |&i| self.lookup_slice(i) == value,
+            |&i| self.hash_slice(self.lookup_slice(i)),
+        );
+        let id = Self::try_insert(entry, &self.rangevec, |rangevec| {
+            rangevec.vec.try_push_owned_slice(value, I::MAX.to_usize())
+        })?;
+
         #[cfg(feature = "debug")]
         self.references.fetch_add(1, atomic::Ordering::Relaxed);
-
-        let hash = self.hash_slice(&value);
-        let id = *self
-            .map
-            .entry(
-                hash,
-                |&i| self.lookup_slice(i) == value,
-                |&i| self.hash_slice(self.lookup_slice(i)),
-            )
-            .or_insert_with(|| {
-                let range = self.rangevec.vec.push_owned_slice(value);
-                self.rangevec.push_range(range)
-            })
-            .get();
-        InternedSlice::new(id)
+        Some(InternedSlice::new(id))
     }
 
     /// Interns the given value in this arena.
@@ -612,42 +788,63 @@ where
     /// Contrary to [`intern_owned()`](Self::intern_owned), no locks are held
     /// internally because this function already takes an exclusive mutable
     /// reference to this arena.
+    ///
+    /// # Panics
+    ///
+    /// This function panics if the arena is full (based on the index type `I`).
+    /// Use [`try_intern_owned_mut()`](Self::try_intern_owned_mut) for a
+    /// fallible API.
     pub fn intern_owned_mut(&mut self, value: Vec<T>) -> InternedSlice<T, H, I> {
+        match self.try_intern_owned_mut(value) {
+            Some(x) => x,
+            None => panic!("Cannot intern in a full ArenaSlice"),
+        }
+    }
+
+    /// Interns the given value in this arena.
+    ///
+    /// If the value was already interned in this arena, its interning index
+    /// will simply be returned. Otherwise it will be stored into the arena.
+    ///
+    /// This returns [`None`] if the arena is full (based on the index type
+    /// `I`).
+    ///
+    /// Contrary to [`try_intern_owned()`](Self::try_intern_owned), no locks are
+    /// held internally because this function already takes an exclusive mutable
+    /// reference to this arena.
+    pub fn try_intern_owned_mut(&mut self, value: Vec<T>) -> Option<InternedSlice<T, H, I>> {
+        let hash = self.hash_slice(&value);
+        #[cfg(not(feature = "sync"))]
+        let id = {
+            let entry = self.map.entry(
+                hash,
+                |&i| self.rangevec.lookup_slice(i) == value,
+                |&i| Self::hash_iter(&self.hasher, self.rangevec.lookup_slice(i)),
+            );
+            Self::try_insert_mut(entry, &mut self.rangevec, value.len(), |rangevec| {
+                let mut value = value;
+                rangevec.vec.append(&mut value);
+            })?
+        };
+        #[cfg(feature = "sync")]
+        let id = {
+            let entry = self.map.entry_mut(
+                hash,
+                |&i| self.rangevec.lookup_slice(i) == value,
+                |&i| Self::hash_iter(&self.hasher, self.rangevec.lookup_slice(i)),
+            );
+            Self::try_insert_mut(entry, &mut self.rangevec, |rangevec| {
+                rangevec
+                    .vec
+                    .try_push_owned_slice_mut(value, I::MAX.to_usize())
+            })?
+        };
+
         #[cfg(feature = "debug")]
         {
             *self.references.get_mut() += 1;
         }
-
-        let hash = self.hash_slice(&value);
-        #[cfg(not(feature = "sync"))]
-        let entry = self.map.entry(
-            hash,
-            |&i| self.rangevec.lookup_slice(i) == value,
-            |&i| Self::hash_iter(&self.hasher, self.rangevec.lookup_slice(i)),
-        );
-        #[cfg(feature = "sync")]
-        let entry = self.map.entry_mut(
-            hash,
-            |&i| self.rangevec.lookup_slice(i) == value,
-            |&i| Self::hash_iter(&self.hasher, self.rangevec.lookup_slice(i)),
-        );
-        let id = *entry
-            .or_insert_with(|| {
-                #[cfg(not(feature = "sync"))]
-                let range = {
-                    let start = self.rangevec.vec.len();
-                    let mut value = value;
-                    self.rangevec.vec.append(&mut value);
-                    drop(value);
-                    let end = self.rangevec.vec.len();
-                    start..end
-                };
-                #[cfg(feature = "sync")]
-                let range = self.rangevec.vec.push_owned_slice_mut(value);
-                self.rangevec.push_range_mut(range)
-            })
-            .get();
-        InternedSlice::new(id)
+        Some(InternedSlice::new(id))
     }
 
     /// Interns the given value in this arena.
@@ -658,25 +855,48 @@ where
     /// See also [`intern_array_mut()`](Self::intern_array_mut), which is more
     /// efficient if you hold a mutable reference to this arena as it avoids
     /// acquiring locks.
+    ///
+    /// # Panics
+    ///
+    /// This function panics if the arena is full (based on the index type `I`).
+    /// Use [`try_intern_array()`](Self::try_intern_array) for a fallible API.
     #[cfg(feature = "sync")]
     pub fn intern_array<const N: usize>(&self, value: [T; N]) -> InternedSlice<T, H, I> {
+        match self.try_intern_array(value) {
+            Some(x) => x,
+            None => panic!("Cannot intern in a full ArenaSlice"),
+        }
+    }
+
+    /// Interns the given value in this arena.
+    ///
+    /// If the value was already interned in this arena, its interning index
+    /// will simply be returned. Otherwise it will be stored into the arena.
+    ///
+    /// This returns [`None`] if the arena is full (based on the index type
+    /// `I`).
+    ///
+    /// See also [`try_intern_array_mut()`](Self::try_intern_array_mut), which
+    /// is more efficient if you hold a mutable reference to this arena as it
+    /// avoids acquiring locks.
+    #[cfg(feature = "sync")]
+    pub fn try_intern_array<const N: usize>(
+        &self,
+        value: [T; N],
+    ) -> Option<InternedSlice<T, H, I>> {
+        let hash = self.hash_slice(&value);
+        let entry = self.map.entry(
+            hash,
+            |&i| self.lookup_slice(i) == value,
+            |&i| self.hash_slice(self.lookup_slice(i)),
+        );
+        let id = Self::try_insert(entry, &self.rangevec, |rangevec| {
+            rangevec.vec.try_push_array(value, I::MAX.to_usize())
+        })?;
+
         #[cfg(feature = "debug")]
         self.references.fetch_add(1, atomic::Ordering::Relaxed);
-
-        let hash = self.hash_slice(&value);
-        let id = *self
-            .map
-            .entry(
-                hash,
-                |&i| self.lookup_slice(i) == value,
-                |&i| self.hash_slice(self.lookup_slice(i)),
-            )
-            .or_insert_with(|| {
-                let range = self.rangevec.vec.push_array(value);
-                self.rangevec.push_range(range)
-            })
-            .get();
-        InternedSlice::new(id)
+        Some(InternedSlice::new(id))
     }
 
     /// Interns the given value in this arena.
@@ -687,40 +907,63 @@ where
     /// Contrary to [`intern_array()`](Self::intern_array), no locks are held
     /// internally because this function already takes an exclusive mutable
     /// reference to this arena.
+    ///
+    /// # Panics
+    ///
+    /// This function panics if the arena is full (based on the index type `I`).
+    /// Use [`try_intern_array_mut()`](Self::try_intern_array_mut) for a
+    /// fallible API.
     pub fn intern_array_mut<const N: usize>(&mut self, value: [T; N]) -> InternedSlice<T, H, I> {
+        match self.try_intern_array_mut(value) {
+            Some(x) => x,
+            None => panic!("Cannot intern in a full ArenaSlice"),
+        }
+    }
+
+    /// Interns the given value in this arena.
+    ///
+    /// If the value was already interned in this arena, its interning index
+    /// will simply be returned. Otherwise it will be stored into the arena.
+    ///
+    /// This returns [`None`] if the arena is full (based on the index type
+    /// `I`).
+    ///
+    /// Contrary to [`try_intern_array()`](Self::try_intern_array), no locks are
+    /// held internally because this function already takes an exclusive mutable
+    /// reference to this arena.
+    pub fn try_intern_array_mut<const N: usize>(
+        &mut self,
+        value: [T; N],
+    ) -> Option<InternedSlice<T, H, I>> {
+        let hash = self.hash_slice(&value);
+        #[cfg(not(feature = "sync"))]
+        let id = {
+            let entry = self.map.entry(
+                hash,
+                |&i| self.rangevec.lookup_slice(i) == value,
+                |&i| Self::hash_iter(&self.hasher, self.rangevec.lookup_slice(i)),
+            );
+            Self::try_insert_mut(entry, &mut self.rangevec, N, |rangevec| {
+                rangevec.vec.extend(value);
+            })?
+        };
+        #[cfg(feature = "sync")]
+        let id = {
+            let entry = self.map.entry_mut(
+                hash,
+                |&i| self.rangevec.lookup_slice(i) == value,
+                |&i| Self::hash_iter(&self.hasher, self.rangevec.lookup_slice(i)),
+            );
+            Self::try_insert_mut(entry, &mut self.rangevec, |rangevec| {
+                rangevec.vec.try_push_array_mut(value, I::MAX.to_usize())
+            })?
+        };
+
         #[cfg(feature = "debug")]
         {
             *self.references.get_mut() += 1;
         }
-
-        let hash = self.hash_slice(&value);
-        #[cfg(not(feature = "sync"))]
-        let entry = self.map.entry(
-            hash,
-            |&i| self.rangevec.lookup_slice(i) == value,
-            |&i| Self::hash_iter(&self.hasher, self.rangevec.lookup_slice(i)),
-        );
-        #[cfg(feature = "sync")]
-        let entry = self.map.entry_mut(
-            hash,
-            |&i| self.rangevec.lookup_slice(i) == value,
-            |&i| Self::hash_iter(&self.hasher, self.rangevec.lookup_slice(i)),
-        );
-        let id = *entry
-            .or_insert_with(|| {
-                #[cfg(not(feature = "sync"))]
-                let range = {
-                    let start = self.rangevec.vec.len();
-                    self.rangevec.vec.extend(value);
-                    let end = self.rangevec.vec.len();
-                    start..end
-                };
-                #[cfg(feature = "sync")]
-                let range = self.rangevec.vec.push_array_mut(value);
-                self.rangevec.push_range_mut(range)
-            })
-            .get();
-        InternedSlice::new(id)
+        Some(InternedSlice::new(id))
     }
 
     /// Interns the given iterator (collected as a slice) in this arena.
@@ -732,6 +975,11 @@ where
     /// efficient if you hold a mutable reference to this arena as it avoids
     /// acquiring locks.
     ///
+    /// # Panics
+    ///
+    /// This function panics if the arena is full (based on the index type `I`).
+    /// Use [`try_intern_iter()`](Self::try_intern_iter) for a fallible API.
+    ///
     /// # Safety
     ///
     /// This function requires the iterator length to be correct (and not to
@@ -742,30 +990,53 @@ where
         &self,
         value: impl ExactSizeIterator<Item = T> + Clone,
     ) -> InternedSlice<T, H, I> {
+        // SAFETY: The caller ensures that the iterator length is correct.
+        match unsafe { self.try_intern_iter(value) } {
+            Some(x) => x,
+            None => panic!("Cannot intern in a full ArenaSlice"),
+        }
+    }
+
+    /// Interns the given iterator (collected as a slice) in this arena.
+    ///
+    /// If the value was already interned in this arena, its interning index
+    /// will simply be returned. Otherwise it will be stored into the arena.
+    ///
+    /// This returns [`None`] if the arena is full (based on the index type
+    /// `I`).
+    ///
+    /// See also [`try_intern_iter_mut()`](Self::try_intern_iter_mut), which is
+    /// more efficient if you hold a mutable reference to this arena as it
+    /// avoids acquiring locks.
+    ///
+    /// # Safety
+    ///
+    /// This function requires the iterator length to be correct (and not to
+    /// change upon cloning). This is akin to the nightly-only
+    /// [`TrustedLen`](core::iter::TrustedLen) trait.
+    #[cfg(feature = "sync")]
+    pub unsafe fn try_intern_iter(
+        &self,
+        value: impl ExactSizeIterator<Item = T> + Clone,
+    ) -> Option<InternedSlice<T, H, I>> {
+        let hash = Self::hash_iter(&self.hasher, value.clone());
+        let entry = self.map.entry(
+            hash,
+            |&i| {
+                let lhs = self.lookup_slice(i).iter();
+                let rhs = value.clone();
+                Self::iter_eq(lhs, rhs)
+            },
+            |&i| self.hash_slice(self.lookup_slice(i)),
+        );
+        let id = Self::try_insert(entry, &self.rangevec, |rangevec| {
+            // SAFETY: The caller ensures that the iterator length is correct.
+            unsafe { rangevec.vec.try_push_contiguous(value, I::MAX.to_usize()) }
+        })?;
+
         #[cfg(feature = "debug")]
         self.references.fetch_add(1, atomic::Ordering::Relaxed);
-
-        let hash = Self::hash_iter(&self.hasher, value.clone());
-
-        let id = *self
-            .map
-            .entry(
-                hash,
-                |&i| {
-                    let lhs = self.lookup_slice(i).iter();
-                    let rhs = value.clone();
-                    Self::iter_eq(lhs, rhs)
-                },
-                |&i| self.hash_slice(self.lookup_slice(i)),
-            )
-            .or_insert_with(|| {
-                // SAFETY: The caller ensures that the iterator length is
-                // correct.
-                let range = unsafe { self.rangevec.vec.push_contiguous(value) };
-                self.rangevec.push_range(range)
-            })
-            .get();
-        InternedSlice::new(id)
+        Some(InternedSlice::new(id))
     }
 
     /// Interns the given iterator (collected as a slice) in this arena.
@@ -777,6 +1048,12 @@ where
     /// internally because this function already takes an exclusive mutable
     /// reference to this arena.
     ///
+    /// # Panics
+    ///
+    /// This function panics if the arena is full (based on the index type `I`).
+    /// Use [`try_intern_iter_mut()`](Self::try_intern_iter_mut) for a fallible
+    /// API.
+    ///
     /// # Safety
     ///
     /// This function requires the iterator length to be correct (and not to
@@ -786,50 +1063,77 @@ where
         &mut self,
         value: impl ExactSizeIterator<Item = T> + Clone,
     ) -> InternedSlice<T, H, I> {
-        #[cfg(feature = "debug")]
-        {
-            *self.references.get_mut() += 1;
+        // SAFETY: The caller ensures that the iterator length is correct.
+        match unsafe { self.try_intern_iter_mut(value) } {
+            Some(x) => x,
+            None => panic!("Cannot intern in a full ArenaSlice"),
         }
+    }
 
+    /// Interns the given iterator (collected as a slice) in this arena.
+    ///
+    /// If the value was already interned in this arena, its interning index
+    /// will simply be returned. Otherwise it will be stored into the arena.
+    ///
+    /// This returns [`None`] if the arena is full (based on the index type
+    /// `I`).
+    ///
+    /// Contrary to [`try_intern_iter()`](Self::try_intern_iter), no locks are
+    /// held internally because this function already takes an exclusive mutable
+    /// reference to this arena.
+    ///
+    /// # Safety
+    ///
+    /// This function requires the iterator length to be correct (and not to
+    /// change upon cloning). This is akin to the nightly-only
+    /// [`TrustedLen`](core::iter::TrustedLen) trait.
+    pub unsafe fn try_intern_iter_mut(
+        &mut self,
+        value: impl ExactSizeIterator<Item = T> + Clone,
+    ) -> Option<InternedSlice<T, H, I>> {
         let hash = Self::hash_iter(&self.hasher, value.clone());
-
         #[cfg(not(feature = "sync"))]
-        let entry = self.map.entry(
-            hash,
-            |&i| {
-                let lhs = self.rangevec.lookup_slice(i).iter();
-                let rhs = value.clone();
-                Self::iter_eq(lhs, rhs)
-            },
-            |&i| Self::hash_iter(&self.hasher, self.rangevec.lookup_slice(i)),
-        );
+        let id = {
+            let entry = self.map.entry(
+                hash,
+                |&i| {
+                    let lhs = self.rangevec.lookup_slice(i).iter();
+                    let rhs = value.clone();
+                    Self::iter_eq(lhs, rhs)
+                },
+                |&i| Self::hash_iter(&self.hasher, self.rangevec.lookup_slice(i)),
+            );
+            Self::try_insert_mut(entry, &mut self.rangevec, value.len(), |rangevec| {
+                rangevec.vec.extend(value);
+            })?
+        };
         #[cfg(feature = "sync")]
-        let entry = self.map.entry_mut(
-            hash,
-            |&i| {
-                let lhs = self.rangevec.lookup_slice(i).iter();
-                let rhs = value.clone();
-                Self::iter_eq(lhs, rhs)
-            },
-            |&i| Self::hash_iter(&self.hasher, self.rangevec.lookup_slice(i)),
-        );
-        let id = *entry
-            .or_insert_with(|| {
-                #[cfg(not(feature = "sync"))]
-                let range = {
-                    let start = self.rangevec.vec.len();
-                    self.rangevec.vec.extend(value);
-                    let end = self.rangevec.vec.len();
-                    start..end
-                };
+        let id = {
+            let entry = self.map.entry_mut(
+                hash,
+                |&i| {
+                    let lhs = self.rangevec.lookup_slice(i).iter();
+                    let rhs = value.clone();
+                    Self::iter_eq(lhs, rhs)
+                },
+                |&i| Self::hash_iter(&self.hasher, self.rangevec.lookup_slice(i)),
+            );
+            Self::try_insert_mut(entry, &mut self.rangevec, |rangevec| {
                 // SAFETY: The caller ensures that the iterator length is
                 // correct.
-                #[cfg(feature = "sync")]
-                let range = unsafe { self.rangevec.vec.push_contiguous_mut(value) };
-                self.rangevec.push_range_mut(range)
-            })
-            .get();
-        InternedSlice::new(id)
+                unsafe {
+                    rangevec
+                        .vec
+                        .try_push_contiguous_mut(value, I::MAX.to_usize())
+                }
+            })?
+        };
+
+        #[cfg(feature = "debug")]
+        {
+            *self.references.get_mut() += 1;
+        }
+        Some(InternedSlice::new(id))
     }
 
     /// Unconditionally push a value, without validating that it's already
@@ -837,37 +1141,17 @@ where
     ///
     /// Calling this function multiple times with the same value doesn't violate
     /// safety, but the value will be stored multiple times in the arena.
+    ///
+    /// # Panics
+    ///
+    /// This function panics if the arena is full (based on the index type `I`).
+    /// Use [`try_push_owned_mut`](Self::try_push_owned_mut) for a fallible API.
     #[cfg(feature = "raw")]
     pub fn push_owned_mut(&mut self, value: Vec<T>) -> InternedSlice<T, H, I> {
-        #[cfg(feature = "debug")]
-        {
-            *self.references.get_mut() += 1;
+        match self.try_push_owned_mut(value) {
+            Some(x) => x,
+            None => panic!("Cannot intern in a full ArenaSlice"),
         }
-
-        let hash = self.hash_slice(&value);
-
-        #[cfg(not(feature = "sync"))]
-        let range = {
-            let start = self.rangevec.vec.len();
-            let mut value = value;
-            self.rangevec.vec.append(&mut value);
-            drop(value);
-            let end = self.rangevec.vec.len();
-            start..end
-        };
-        #[cfg(feature = "sync")]
-        let range = self.rangevec.vec.push_owned_slice_mut(value);
-        let id = self.rangevec.push_range_mut(range);
-
-        #[cfg(not(feature = "sync"))]
-        self.map.insert_unique(hash, id, |&i| {
-            Self::hash_iter(&self.hasher, self.rangevec.lookup_slice(i))
-        });
-        #[cfg(feature = "sync")]
-        self.map.insert_unique_mut(hash, id, |&i| {
-            Self::hash_iter(&self.hasher, self.rangevec.lookup_slice(i))
-        });
-        InternedSlice::new(id)
     }
 
     /// Unconditionally push a value, without validating that it's already
@@ -875,35 +1159,74 @@ where
     ///
     /// Calling this function multiple times with the same value doesn't violate
     /// safety, but the value will be stored multiple times in the arena.
+    ///
+    /// This returns [`None`] if the arena is full (based on the index type
+    /// `I`).
     #[cfg(feature = "raw")]
-    pub fn push_array_mut<const N: usize>(&mut self, value: [T; N]) -> InternedSlice<T, H, I> {
+    pub fn try_push_owned_mut(&mut self, value: Vec<T>) -> Option<InternedSlice<T, H, I>> {
+        #[cfg(not(feature = "sync"))]
+        let id = self.try_push_mut_(value.len(), |rangevec| {
+            let mut value = value;
+            rangevec.vec.append(&mut value);
+        })?;
+        #[cfg(feature = "sync")]
+        let id = self.try_push_mut_(|rangevec| {
+            rangevec
+                .vec
+                .try_push_owned_slice_mut(value, I::MAX.to_usize())
+        })?;
+
         #[cfg(feature = "debug")]
         {
             *self.references.get_mut() += 1;
         }
+        Some(InternedSlice::new(id))
+    }
 
-        let hash = self.hash_slice(&value);
+    /// Unconditionally push a value, without validating that it's already
+    /// interned.
+    ///
+    /// Calling this function multiple times with the same value doesn't violate
+    /// safety, but the value will be stored multiple times in the arena.
+    ///
+    /// # Panics
+    ///
+    /// This function panics if the arena is full (based on the index type `I`).
+    /// Use [`try_push_array_mut`](Self::try_push_array_mut) for a fallible API.
+    #[cfg(feature = "raw")]
+    pub fn push_array_mut<const N: usize>(&mut self, value: [T; N]) -> InternedSlice<T, H, I> {
+        match self.try_push_array_mut(value) {
+            Some(x) => x,
+            None => panic!("Cannot intern in a full ArenaSlice"),
+        }
+    }
 
+    /// Unconditionally push a value, without validating that it's already
+    /// interned.
+    ///
+    /// Calling this function multiple times with the same value doesn't violate
+    /// safety, but the value will be stored multiple times in the arena.
+    ///
+    /// This returns [`None`] if the arena is full (based on the index type
+    /// `I`).
+    #[cfg(feature = "raw")]
+    pub fn try_push_array_mut<const N: usize>(
+        &mut self,
+        value: [T; N],
+    ) -> Option<InternedSlice<T, H, I>> {
         #[cfg(not(feature = "sync"))]
-        let range = {
-            let start = self.rangevec.vec.len();
-            self.rangevec.vec.extend(value);
-            let end = self.rangevec.vec.len();
-            start..end
-        };
+        let id = self.try_push_mut_(N, |rangevec| {
+            rangevec.vec.extend(value);
+        })?;
         #[cfg(feature = "sync")]
-        let range = self.rangevec.vec.push_array_mut(value);
-        let id = self.rangevec.push_range_mut(range);
+        let id = self
+            .try_push_mut_(|rangevec| rangevec.vec.try_push_array_mut(value, I::MAX.to_usize()))?;
 
-        #[cfg(not(feature = "sync"))]
-        self.map.insert_unique(hash, id, |&i| {
-            Self::hash_iter(&self.hasher, self.rangevec.lookup_slice(i))
-        });
-        #[cfg(feature = "sync")]
-        self.map.insert_unique_mut(hash, id, |&i| {
-            Self::hash_iter(&self.hasher, self.rangevec.lookup_slice(i))
-        });
-        InternedSlice::new(id)
+        #[cfg(feature = "debug")]
+        {
+            *self.references.get_mut() += 1;
+        }
+        Some(InternedSlice::new(id))
     }
 
     /// Unconditionally push an iterator as a single contiguous value, without
@@ -911,6 +1234,11 @@ where
     ///
     /// Calling this function multiple times with the same value doesn't violate
     /// safety, but the value will be stored multiple times in the arena.
+    ///
+    /// # Panics
+    ///
+    /// This function panics if the arena is full (based on the index type `I`).
+    /// Use [`try_push_iter_mut`](Self::try_push_iter_mut) for a fallible API.
     ///
     /// # Safety
     ///
@@ -931,6 +1259,33 @@ where
     /// Calling this function multiple times with the same value doesn't violate
     /// safety, but the value will be stored multiple times in the arena.
     ///
+    /// This returns [`None`] if the arena is full (based on the index type
+    /// `I`).
+    ///
+    /// # Safety
+    ///
+    /// This function requires the iterator length to be correct. This is akin
+    /// to the nightly-only [`TrustedLen`](core::iter::TrustedLen) trait.
+    #[cfg(feature = "raw")]
+    pub unsafe fn try_push_iter_mut(
+        &mut self,
+        value: impl ExactSizeIterator<Item = T>,
+    ) -> Option<InternedSlice<T, H, I>> {
+        // SAFETY: Simply forwarding to the crate-internal version.
+        unsafe { self.try_push_iter_mut_(value) }
+    }
+
+    /// Unconditionally push an iterator as a single contiguous value, without
+    /// validating that it's already interned.
+    ///
+    /// Calling this function multiple times with the same value doesn't violate
+    /// safety, but the value will be stored multiple times in the arena.
+    ///
+    /// # Panics
+    ///
+    /// This function panics if the arena is full (based on the index type `I`).
+    /// Use [`try_push_iter_mut_`](Self::try_push_iter_mut_) for a fallible API.
+    ///
     /// # Safety
     ///
     /// This function requires the iterator length to be correct. This is akin
@@ -939,34 +1294,49 @@ where
         &mut self,
         value: impl ExactSizeIterator<Item = T>,
     ) -> InternedSlice<T, H, I> {
+        // SAFETY: The caller ensures that the iterator length is correct.
+        match unsafe { self.try_push_iter_mut_(value) } {
+            Some(x) => x,
+            None => panic!("Cannot intern in a full ArenaSlice"),
+        }
+    }
+
+    /// Unconditionally push an iterator as a single contiguous value, without
+    /// validating that it's already interned.
+    ///
+    /// Calling this function multiple times with the same value doesn't violate
+    /// safety, but the value will be stored multiple times in the arena.
+    ///
+    /// This returns [`None`] if the arena is full (based on the index type
+    /// `I`).
+    ///
+    /// # Safety
+    ///
+    /// This function requires the iterator length to be correct. This is akin
+    /// to the nightly-only [`TrustedLen`](core::iter::TrustedLen) trait.
+    pub(crate) unsafe fn try_push_iter_mut_(
+        &mut self,
+        value: impl ExactSizeIterator<Item = T>,
+    ) -> Option<InternedSlice<T, H, I>> {
+        #[cfg(not(feature = "sync"))]
+        let id = self.try_push_mut_(value.len(), |rangevec| {
+            rangevec.vec.extend(value);
+        })?;
+        #[cfg(feature = "sync")]
+        let id = self.try_push_mut_(|rangevec| {
+            // SAFETY: The caller ensures that the iterator length is correct.
+            unsafe {
+                rangevec
+                    .vec
+                    .try_push_contiguous_mut(value, I::MAX.to_usize())
+            }
+        })?;
+
         #[cfg(feature = "debug")]
         {
             *self.references.get_mut() += 1;
         }
-
-        #[cfg(not(feature = "sync"))]
-        let range = {
-            let start = self.rangevec.vec.len();
-            self.rangevec.vec.extend(value);
-            let end = self.rangevec.vec.len();
-            start..end
-        };
-        // SAFETY: The caller ensures that the iterator length is correct.
-        #[cfg(feature = "sync")]
-        let range = unsafe { self.rangevec.vec.push_contiguous_mut(value) };
-        let id = self.rangevec.push_range_mut(range.clone());
-
-        let hash = self.hash_slice(&self.rangevec.vec[range]);
-
-        #[cfg(not(feature = "sync"))]
-        self.map.insert_unique(hash, id, |&i| {
-            Self::hash_iter(&self.hasher, self.rangevec.lookup_slice(i))
-        });
-        #[cfg(feature = "sync")]
-        self.map.insert_unique_mut(hash, id, |&i| {
-            Self::hash_iter(&self.hasher, self.rangevec.lookup_slice(i))
-        });
-        InternedSlice::new(id)
+        Some(InternedSlice::new(id))
     }
 }
 
@@ -986,25 +1356,48 @@ where
     ///
     /// See also [`intern_mut()`](Self::intern_mut), which is more efficient if
     /// you hold a mutable reference to this arena as it avoids acquiring locks.
+    ///
+    /// # Panics
+    ///
+    /// This function panics if the arena is full (based on the index type `I`).
+    /// Use [`try_intern`](Self::try_intern) for a fallible API.
     #[cfg(feature = "sync")]
     pub fn intern(&self, value: &[T]) -> InternedSlice<T, H, I> {
+        match self.try_intern(value) {
+            Some(x) => x,
+            None => panic!("Cannot intern in a full ArenaSlice"),
+        }
+    }
+
+    /// Interns the given value in this arena.
+    ///
+    /// If the value was already interned in this arena, its interning index
+    /// will simply be returned. Otherwise it will be stored into the arena.
+    ///
+    /// This returns [`None`] if the arena is full (based on the index type
+    /// `I`).
+    ///
+    /// If `T` is [`Copy`], it may be more efficient to call
+    /// [`try_intern_copy()`](Self::try_intern_copy) instead.
+    ///
+    /// See also [`try_intern_mut()`](Self::try_intern_mut), which is more
+    /// efficient if you hold a mutable reference to this arena as it avoids
+    /// acquiring locks.
+    #[cfg(feature = "sync")]
+    pub fn try_intern(&self, value: &[T]) -> Option<InternedSlice<T, H, I>> {
+        let hash = self.hash_slice(value);
+        let entry = self.map.entry(
+            hash,
+            |&i| self.lookup_slice(i) == value,
+            |&i| self.hash_slice(self.lookup_slice(i)),
+        );
+        let id = Self::try_insert(entry, &self.rangevec, |rangevec| {
+            rangevec.vec.try_push_slice(value, I::MAX.to_usize())
+        })?;
+
         #[cfg(feature = "debug")]
         self.references.fetch_add(1, atomic::Ordering::Relaxed);
-
-        let hash = self.hash_slice(value);
-        let id = *self
-            .map
-            .entry(
-                hash,
-                |&i| self.lookup_slice(i) == value,
-                |&i| self.hash_slice(self.lookup_slice(i)),
-            )
-            .or_insert_with(|| {
-                let range = self.rangevec.vec.push_slice(value);
-                self.rangevec.push_range(range)
-            })
-            .get();
-        InternedSlice::new(id)
+        Some(InternedSlice::new(id))
     }
 
     /// Interns the given value in this arena.
@@ -1018,40 +1411,62 @@ where
     /// Contrary to [`intern()`](Self::intern), no locks are held internally
     /// because this function already takes an exclusive mutable reference to
     /// this arena.
+    ///
+    /// # Panics
+    ///
+    /// This function panics if the arena is full (based on the index type `I`).
+    /// Use [`try_intern_mut`](Self::try_intern_mut) for a fallible API.
     pub fn intern_mut(&mut self, value: &[T]) -> InternedSlice<T, H, I> {
+        match self.try_intern_mut(value) {
+            Some(x) => x,
+            None => panic!("Cannot intern in a full ArenaSlice"),
+        }
+    }
+
+    /// Interns the given value in this arena.
+    ///
+    /// If the value was already interned in this arena, its interning index
+    /// will simply be returned. Otherwise it will be stored into the arena.
+    ///
+    /// This returns [`None`] if the arena is full (based on the index type
+    /// `I`).
+    ///
+    /// If `T` is [`Copy`], it may be more efficient to call
+    /// [`try_intern_copy_mut()`](Self::try_intern_copy_mut) instead.
+    ///
+    /// Contrary to [`try_intern()`](Self::try_intern), no locks are held
+    /// internally because this function already takes an exclusive mutable
+    /// reference to this arena.
+    pub fn try_intern_mut(&mut self, value: &[T]) -> Option<InternedSlice<T, H, I>> {
+        let hash = self.hash_slice(value);
+        #[cfg(not(feature = "sync"))]
+        let id = {
+            let entry = self.map.entry(
+                hash,
+                |&i| self.rangevec.lookup_slice(i) == value,
+                |&i| Self::hash_iter(&self.hasher, self.rangevec.lookup_slice(i)),
+            );
+            Self::try_insert_mut(entry, &mut self.rangevec, value.len(), |rangevec| {
+                rangevec.vec.extend_from_slice(value);
+            })?
+        };
+        #[cfg(feature = "sync")]
+        let id = {
+            let entry = self.map.entry_mut(
+                hash,
+                |&i| self.rangevec.lookup_slice(i) == value,
+                |&i| Self::hash_iter(&self.hasher, self.rangevec.lookup_slice(i)),
+            );
+            Self::try_insert_mut(entry, &mut self.rangevec, |rangevec| {
+                rangevec.vec.try_push_slice_mut(value, I::MAX.to_usize())
+            })?
+        };
+
         #[cfg(feature = "debug")]
         {
             *self.references.get_mut() += 1;
         }
-
-        let hash = self.hash_slice(value);
-        #[cfg(not(feature = "sync"))]
-        let entry = self.map.entry(
-            hash,
-            |&i| self.rangevec.lookup_slice(i) == value,
-            |&i| Self::hash_iter(&self.hasher, self.rangevec.lookup_slice(i)),
-        );
-        #[cfg(feature = "sync")]
-        let entry = self.map.entry_mut(
-            hash,
-            |&i| self.rangevec.lookup_slice(i) == value,
-            |&i| Self::hash_iter(&self.hasher, self.rangevec.lookup_slice(i)),
-        );
-        let id = *entry
-            .or_insert_with(|| {
-                #[cfg(not(feature = "sync"))]
-                let range = {
-                    let start = self.rangevec.vec.len();
-                    self.rangevec.vec.extend_from_slice(value);
-                    let end = self.rangevec.vec.len();
-                    start..end
-                };
-                #[cfg(feature = "sync")]
-                let range = self.rangevec.vec.push_slice_mut(value);
-                self.rangevec.push_range_mut(range)
-            })
-            .get();
-        InternedSlice::new(id)
+        Some(InternedSlice::new(id))
     }
 
     /// Unconditionally push a value, without validating that it's already
@@ -1062,6 +1477,11 @@ where
     ///
     /// If `T` is [`Copy`], calling [`push_copy_mut()`](Self::push_copy_mut) may
     /// be more efficient.
+    ///
+    /// # Panics
+    ///
+    /// This function panics if the arena is full (based on the index type `I`).
+    /// Use [`try_push_mut`](Self::try_push_mut) for a fallible API.
     #[cfg(feature = "raw")]
     pub fn push_mut(&mut self, value: &[T]) -> I {
         self.push(value)
@@ -1072,34 +1492,56 @@ where
     ///
     /// Calling this function multiple times with the same value doesn't violate
     /// safety, but the value will be stored multiple times in the arena.
+    ///
+    /// This returns [`None`] if the arena is full (based on the index type
+    /// `I`).
+    ///
+    /// If `T` is [`Copy`], calling
+    /// [`try_push_copy_mut()`](Self::try_push_copy_mut) may be more efficient.
+    #[cfg(feature = "raw")]
+    pub fn try_push_mut(&mut self, value: &[T]) -> Option<I> {
+        self.try_push(value)
+    }
+
+    /// Unconditionally push a value, without validating that it's already
+    /// interned.
+    ///
+    /// Calling this function multiple times with the same value doesn't violate
+    /// safety, but the value will be stored multiple times in the arena.
+    ///
+    /// # Panics
+    ///
+    /// This function panics if the arena is full (based on the index type `I`).
+    /// Use [`try_push`](Self::try_push) for a fallible API.
     pub(crate) fn push(&mut self, value: &[T]) -> I {
+        match self.try_push(value) {
+            Some(x) => x,
+            None => panic!("Cannot intern in a full ArenaSlice"),
+        }
+    }
+
+    /// Unconditionally push a value, without validating that it's already
+    /// interned.
+    ///
+    /// Calling this function multiple times with the same value doesn't violate
+    /// safety, but the value will be stored multiple times in the arena.
+    ///
+    /// This returns [`None`] if the arena is full (based on the index type
+    /// `I`).
+    pub(crate) fn try_push(&mut self, value: &[T]) -> Option<I> {
+        #[cfg(not(feature = "sync"))]
+        let id = self.try_push_mut_(value.len(), |rangevec| {
+            rangevec.vec.extend_from_slice(value);
+        })?;
+        #[cfg(feature = "sync")]
+        let id = self
+            .try_push_mut_(|rangevec| rangevec.vec.try_push_slice_mut(value, I::MAX.to_usize()))?;
+
         #[cfg(feature = "debug")]
         {
             *self.references.get_mut() += 1;
         }
-
-        let hash = self.hash_slice(value);
-
-        #[cfg(not(feature = "sync"))]
-        let range = {
-            let start = self.rangevec.vec.len();
-            self.rangevec.vec.extend_from_slice(value);
-            let end = self.rangevec.vec.len();
-            start..end
-        };
-        #[cfg(feature = "sync")]
-        let range = self.rangevec.vec.push_slice_mut(value);
-        let id = self.rangevec.push_range_mut(range);
-
-        #[cfg(not(feature = "sync"))]
-        self.map.insert_unique(hash, id, |&i| {
-            Self::hash_iter(&self.hasher, self.rangevec.lookup_slice(i))
-        });
-        #[cfg(feature = "sync")]
-        self.map.insert_unique_mut(hash, id, |&i| {
-            Self::hash_iter(&self.hasher, self.rangevec.lookup_slice(i))
-        });
-        id
+        Some(id)
     }
 }
 
@@ -1122,25 +1564,50 @@ where
     /// See also [`intern_copy_mut()`](Self::intern_copy_mut), which is more
     /// efficient if you hold a mutable reference to this arena as it avoids
     /// acquiring locks.
+    ///
+    /// # Panics
+    ///
+    /// This function panics if the arena is full (based on the index type `I`).
+    /// Use [`try_intern_copy`](Self::try_intern_copy) for a fallible API.
     #[cfg(feature = "sync")]
     pub fn intern_copy(&self, value: &[T]) -> InternedSlice<T, H, I> {
+        match self.try_intern_copy(value) {
+            Some(x) => x,
+            None => panic!("Cannot intern in a full ArenaSlice"),
+        }
+    }
+
+    /// Interns the given value in this arena.
+    ///
+    /// If the value was already interned in this arena, its interning index
+    /// will simply be returned. Otherwise it will be stored into the arena.
+    ///
+    /// This returns [`None`] if the arena is full (based on the index type
+    /// `I`).
+    ///
+    /// If `T` is only [`Clone`], you can call
+    /// [`try_intern()`](Self::try_intern) instead. If `T` is also not
+    /// [`Clone`], you can call [`try_intern_owned()`](Self::try_intern_owned)
+    /// or [`try_intern_array()`](Self::try_intern_array).
+    ///
+    /// See also [`try_intern_copy_mut()`](Self::try_intern_copy_mut), which is
+    /// more efficient if you hold a mutable reference to this arena as it
+    /// avoids acquiring locks.
+    #[cfg(feature = "sync")]
+    pub fn try_intern_copy(&self, value: &[T]) -> Option<InternedSlice<T, H, I>> {
+        let hash = self.hash_slice(value);
+        let entry = self.map.entry(
+            hash,
+            |&i| self.lookup_slice(i) == value,
+            |&i| self.hash_slice(self.lookup_slice(i)),
+        );
+        let id = Self::try_insert(entry, &self.rangevec, |rangevec| {
+            rangevec.vec.try_push_slice_copy(value, I::MAX.to_usize())
+        })?;
+
         #[cfg(feature = "debug")]
         self.references.fetch_add(1, atomic::Ordering::Relaxed);
-
-        let hash = self.hash_slice(value);
-        let id = *self
-            .map
-            .entry(
-                hash,
-                |&i| self.lookup_slice(i) == value,
-                |&i| self.hash_slice(self.lookup_slice(i)),
-            )
-            .or_insert_with(|| {
-                let range = self.rangevec.vec.push_slice_copy(value);
-                self.rangevec.push_range(range)
-            })
-            .get();
-        InternedSlice::new(id)
+        Some(InternedSlice::new(id))
     }
 
     /// Interns the given value in this arena.
@@ -1156,34 +1623,68 @@ where
     /// Contrary to [`intern_copy()`](Self::intern_copy), no locks are held
     /// internally because this function already takes an exclusive mutable
     /// reference to this arena.
+    ///
+    /// # Panics
+    ///
+    /// This function panics if the arena is full (based on the index type `I`).
+    /// Use [`try_intern_copy_mut`](Self::try_intern_copy_mut) for a fallible
+    /// API.
     pub fn intern_copy_mut(&mut self, value: &[T]) -> InternedSlice<T, H, I> {
+        match self.try_intern_copy_mut(value) {
+            Some(x) => x,
+            None => panic!("Cannot intern in a full ArenaSlice"),
+        }
+    }
+
+    /// Interns the given value in this arena.
+    ///
+    /// If the value was already interned in this arena, its interning index
+    /// will simply be returned. Otherwise it will be stored into the arena.
+    ///
+    /// This returns [`None`] if the arena is full (based on the index type
+    /// `I`).
+    ///
+    /// If `T` is only [`Clone`], you can call
+    /// [`try_intern_mut()`](Self::try_intern_mut) instead. If `T` is also not
+    /// [`Clone`], you can call
+    /// [`try_intern_owned_mut()`](Self::try_intern_owned_mut)
+    /// or [`try_intern_array_mut()`](Self::try_intern_array_mut).
+    ///
+    /// Contrary to [`try_intern_copy()`](Self::try_intern_copy), no locks are
+    /// held internally because this function already takes an exclusive mutable
+    /// reference to this arena.
+    pub fn try_intern_copy_mut(&mut self, value: &[T]) -> Option<InternedSlice<T, H, I>> {
+        let hash = self.hash_slice(value);
+        #[cfg(not(feature = "sync"))]
+        let id = {
+            let entry = self.map.entry(
+                hash,
+                |&i| self.rangevec.lookup_slice(i) == value,
+                |&i| Self::hash_iter(&self.hasher, self.rangevec.lookup_slice(i)),
+            );
+            Self::try_insert_mut(entry, &mut self.rangevec, value.len(), |rangevec| {
+                rangevec.vec.extend_from_slice(value);
+            })?
+        };
+        #[cfg(feature = "sync")]
+        let id = {
+            let entry = self.map.entry_mut(
+                hash,
+                |&i| self.rangevec.lookup_slice(i) == value,
+                |&i| Self::hash_iter(&self.hasher, self.rangevec.lookup_slice(i)),
+            );
+            Self::try_insert_mut(entry, &mut self.rangevec, |rangevec| {
+                rangevec
+                    .vec
+                    .try_push_slice_copy_mut(value, I::MAX.to_usize())
+            })?
+        };
+
         #[cfg(feature = "debug")]
         {
             *self.references.get_mut() += 1;
         }
-
-        let hash = self.hash_slice(value);
-        let id = *self
-            .map
-            .entry(
-                hash,
-                |&i| self.rangevec.lookup_slice(i) == value,
-                |&i| Self::hash_iter(&self.hasher, self.rangevec.lookup_slice(i)),
-            )
-            .or_insert_with(|| {
-                #[cfg(not(feature = "sync"))]
-                let range = {
-                    let start = self.rangevec.vec.len();
-                    self.rangevec.vec.extend_from_slice(value);
-                    let end = self.rangevec.vec.len();
-                    start..end
-                };
-                #[cfg(feature = "sync")]
-                let range = self.rangevec.vec.push_slice_copy_mut(value);
-                self.rangevec.push_range_mut(range)
-            })
-            .get();
-        InternedSlice::new(id)
+        Some(InternedSlice::new(id))
     }
 
     /// Unconditionally push a value, without validating that it's already
@@ -1194,35 +1695,48 @@ where
     ///
     /// If `T` is only [`Clone`], you can call [`push_mut()`](Self::push_mut)
     /// instead.
+    ///
+    /// # Panics
+    ///
+    /// This function panics if the arena is full (based on the index type `I`).
+    /// Use [`try_push_copy_mut`](Self::try_push_copy_mut) for a fallible API.
     #[cfg(feature = "raw")]
     pub fn push_copy_mut(&mut self, value: &[T]) -> I {
+        match self.try_push_copy_mut(value) {
+            Some(x) => x,
+            None => panic!("Cannot intern in a full ArenaSlice"),
+        }
+    }
+
+    /// Unconditionally push a value, without validating that it's already
+    /// interned.
+    ///
+    /// Calling this function multiple times with the same value doesn't violate
+    /// safety, but the value will be stored multiple times in the arena.
+    ///
+    /// This returns [`None`] if the arena is full (based on the index type
+    /// `I`).
+    ///
+    /// If `T` is only [`Clone`], you can call
+    /// [`try_push_mut()`](Self::try_push_mut) instead.
+    #[cfg(feature = "raw")]
+    pub fn try_push_copy_mut(&mut self, value: &[T]) -> Option<I> {
+        #[cfg(not(feature = "sync"))]
+        let id = self.try_push_mut_(value.len(), |rangevec| {
+            rangevec.vec.extend_from_slice(value);
+        })?;
+        #[cfg(feature = "sync")]
+        let id = self.try_push_mut_(|rangevec| {
+            rangevec
+                .vec
+                .try_push_slice_copy_mut(value, I::MAX.to_usize())
+        })?;
+
         #[cfg(feature = "debug")]
         {
             *self.references.get_mut() += 1;
         }
-
-        let hash = self.hash_slice(value);
-
-        #[cfg(not(feature = "sync"))]
-        let range = {
-            let start = self.rangevec.vec.len();
-            self.rangevec.vec.extend_from_slice(value);
-            let end = self.rangevec.vec.len();
-            start..end
-        };
-        #[cfg(feature = "sync")]
-        let range = self.rangevec.vec.push_slice_copy_mut(value);
-        let id = self.rangevec.push_range_mut(range);
-
-        #[cfg(not(feature = "sync"))]
-        self.map.insert_unique(hash, id, |&i| {
-            Self::hash_iter(&self.hasher, self.rangevec.lookup_slice(i))
-        });
-        #[cfg(feature = "sync")]
-        self.map.insert_unique_mut(hash, id, |&i| {
-            Self::hash_iter(&self.hasher, self.rangevec.lookup_slice(i))
-        });
-        id
+        Some(id)
     }
 }
 
@@ -1232,8 +1746,27 @@ impl<T, H, I: Index> ArenaSlice<T, H, I> {
     /// The caller is responsible for ensuring that the same arena was used to
     /// intern this value, otherwise an arbitrary value will be returned or
     /// a panic will happen.
+    ///
+    /// # Panics
+    ///
+    /// This function panics if the interned handle is out of bounds for this
+    /// arena, for example because the arena was truncated, or because the
+    /// interned handle was deserialized from untrusted data. Use
+    /// [`try_lookup`](Self::try_lookup) for a fallible API.
     pub fn lookup(&self, interned: InternedSlice<T, H, I>) -> &[T] {
         self.lookup_slice(interned.id)
+    }
+
+    /// Retrieves the given [`InternedSlice`] value from this arena.
+    ///
+    /// The caller is responsible for ensuring that the same arena was used to
+    /// intern this value, otherwise an arbitrary value will be returned.
+    ///
+    /// This returns [`None`] if the interned handle is out of bounds for this
+    /// arena, for example because the arena was truncated, or because the
+    /// interned handle was deserialized from untrusted data.
+    pub fn try_lookup(&self, interned: InternedSlice<T, H, I>) -> Option<&[T]> {
+        self.rangevec.try_lookup_slice(interned.id)
     }
 
     fn lookup_slice(&self, id: I) -> &[T] {
@@ -1472,12 +2005,23 @@ where
             .next_element()?
             .ok_or_else(|| A::Error::invalid_length(1, &self))?;
 
-        let mut arena = ArenaSlice::with_capacity(sizes.len(), values.len());
+        let mut arena =
+            ArenaSlice::try_with_capacity(sizes.len(), values.len()).ok_or_else(|| {
+                Error::custom(format!(
+                    "Cannot create an ArenaSlice with capacity for {} slices of {} items",
+                    sizes.len(),
+                    values.len()
+                ))
+            })?;
 
         let mut start = 0;
         for size in sizes {
             let size = size.to_usize();
-            arena.push(&values[start..start + size]);
+            arena
+                .try_push(&values[start..start + size])
+                .ok_or(Error::custom(
+                    "ArenaSlice is full, cannot push more values to it",
+                ))?;
             start += size;
         }
 
@@ -1759,7 +2303,11 @@ where
         let mut start = 0;
         for size in sizes {
             let size = size.to_usize();
-            self.arena.push(&values[start..start + size]);
+            self.arena
+                .try_push(&values[start..start + size])
+                .ok_or(Error::custom(
+                    "ArenaSlice is full, cannot push more values to it",
+                ))?;
             start += size;
         }
 
@@ -1913,7 +2461,14 @@ mod delta {
                 .next_element()?
                 .ok_or_else(|| A::Error::invalid_length(1, &self))?;
 
-            let mut arena = ArenaSlice::with_capacity(sizes.len(), values.len());
+            let mut arena =
+                ArenaSlice::try_with_capacity(sizes.len(), values.len()).ok_or_else(|| {
+                    Error::custom(format!(
+                        "Cannot create an ArenaSlice with capacity for {} slices of {} items",
+                        sizes.len(),
+                        values.len()
+                    ))
+                })?;
 
             let mut acc = Accum::default();
             let mut start = 0;
@@ -1926,7 +2481,9 @@ mod delta {
                     slice.len(),
                     "Invalid Accumulator implementation for DeltaEncoding of ArenaSlice: delta length must match destination slice length"
                 );
-                arena.push(&slice);
+                arena.try_push(&slice).ok_or(Error::custom(
+                    "ArenaSlice is full, cannot push more values to it",
+                ))?;
                 start += size;
             }
 

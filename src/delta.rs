@@ -113,8 +113,9 @@ where
 mod serialization {
     use super::*;
     use crate::{Arena, Index};
+    use alloc::format;
     use core::hash::{BuildHasher, Hash};
-    use serde::de::{SeqAccess, Visitor};
+    use serde::de::{Error, SeqAccess, Visitor};
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
     impl<T: ?Sized, Storage, H, I, DeltaStorage, Accum> Serialize
@@ -190,12 +191,20 @@ mod serialization {
         {
             let mut arena = match seq.size_hint() {
                 None => Arena::default(),
-                Some(size_hint) => Arena::with_capacity(size_hint),
+                Some(size_hint) => Arena::try_with_capacity(size_hint).ok_or_else(|| {
+                    Error::custom(format!(
+                        "Cannot create an Arena with capacity for {size_hint} values"
+                    ))
+                })?,
             };
 
             let mut acc = Accum::default();
             while let Some(delta) = seq.next_element::<DeltaStorage>()? {
-                arena.push(acc.unfold(delta.borrow()));
+                arena
+                    .try_push(acc.unfold(delta.borrow()))
+                    .ok_or(Error::custom(
+                        "Arena is full, cannot push more values to it",
+                    ))?;
             }
 
             Ok(DeltaEncoding {
