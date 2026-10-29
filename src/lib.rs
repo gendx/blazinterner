@@ -59,7 +59,7 @@ use core::sync::atomic::{self, AtomicUsize};
 #[cfg(feature = "sync")]
 use dashtable::DashTable;
 #[cfg(feature = "sync")]
-use dashtable::{Entry, MutEntry};
+use dashtable::{Entry, EntryMut};
 #[cfg(feature = "delta")]
 pub use delta::{Accumulator, DeltaEncoding};
 #[cfg(feature = "get-size2")]
@@ -720,8 +720,8 @@ where
                 |&i| self.hasher.hash_one(self.vec[i.to_usize()].borrow()),
             );
             match entry {
-                MutEntry::Occupied(e) => *e.get(),
-                MutEntry::Vacant(e) => {
+                EntryMut::Occupied(e) => *e.get(),
+                EntryMut::Vacant(e) => {
                     let x: Storage = value.into();
                     let id = self.vec.try_push_mut(x, I::MAX.to_usize())?;
                     *e.insert(I::from_usize(id)).get()
@@ -911,7 +911,7 @@ where
                 entry.remove();
             }
             #[cfg(feature = "sync")]
-            if let MutEntry::Occupied(entry) = self.map.entry_mut(
+            if let EntryMut::Occupied(entry) = self.map.entry_mut(
                 hash,
                 |&i| self.vec[i.to_usize()].borrow() == value.borrow(),
                 |&i| self.hasher.hash_one(self.vec[i.to_usize()].borrow()),

@@ -2,7 +2,7 @@
 
 [![Crate](https://img.shields.io/crates/v/blazinterner.svg?logo=rust)](https://crates.io/crates/blazinterner)
 [![Documentation](https://img.shields.io/docsrs/blazinterner?logo=rust)](https://docs.rs/blazinterner)
-[![Minimum Rust 1.91.0](https://img.shields.io/badge/rust-1.91.0%2B-orange.svg?logo=rust)](https://releases.rs/docs/1.91.0/)
+[![Minimum Rust 1.95.0](https://img.shields.io/badge/rust-1.95.0%2B-orange.svg?logo=rust)](https://releases.rs/docs/1.95.0/)
 [![Lines of Code](https://www.aschey.tech/tokei/github/gendx/blazinterner?category=code&branch=main)](https://github.com/gendx/blazinterner)
 [![Dependencies](https://deps.rs/repo/github/gendx/blazinterner/status.svg)](https://deps.rs/repo/github/gendx/blazinterner)
 [![License](https://img.shields.io/crates/l/blazinterner.svg)](https://github.com/gendx/blazinterner/blob/main/LICENSE)

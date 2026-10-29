@@ -17,7 +17,7 @@ use core::sync::atomic::{self, AtomicUsize};
 #[cfg(feature = "sync")]
 use dashtable::DashTable;
 #[cfg(feature = "sync")]
-use dashtable::{Entry, MutEntry};
+use dashtable::{Entry, EntryMut};
 #[cfg(feature = "get-size2")]
 use get_size2::{GetSize, GetSizeTracker};
 #[cfg(not(feature = "sync"))]
@@ -665,13 +665,13 @@ where
 
     #[cfg(feature = "sync")]
     fn try_insert_mut(
-        entry: MutEntry<'_, I>,
+        entry: EntryMut<'_, I>,
         rangevec: &mut RangeVec<T, I>,
         try_insert: impl FnOnce(&mut RangeVec<T, I>) -> Option<Range<usize>>,
     ) -> Option<I> {
         let id = match entry {
-            MutEntry::Occupied(e) => *e.get(),
-            MutEntry::Vacant(e) => {
+            EntryMut::Occupied(e) => *e.get(),
+            EntryMut::Vacant(e) => {
                 let range = try_insert(rangevec)?;
                 let id = rangevec.try_push_range_mut(range)?;
                 *e.insert(id).get()
@@ -1793,7 +1793,7 @@ where
                 entry.remove();
             }
             #[cfg(feature = "sync")]
-            if let MutEntry::Occupied(entry) = self.map.entry_mut(
+            if let EntryMut::Occupied(entry) = self.map.entry_mut(
                 hash,
                 |&i| self.rangevec.lookup_slice(i) == slice,
                 |&i| Self::hash_iter(&self.hasher, self.rangevec.lookup_slice(i)),

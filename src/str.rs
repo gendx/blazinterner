@@ -18,7 +18,7 @@ use core::sync::atomic::{self, AtomicUsize};
 #[cfg(feature = "sync")]
 use dashtable::DashTable;
 #[cfg(feature = "sync")]
-use dashtable::{Entry, MutEntry};
+use dashtable::{Entry, EntryMut};
 #[cfg(feature = "get-size2")]
 use get_size2::{GetSize, GetSizeTracker};
 #[cfg(not(feature = "sync"))]
@@ -721,8 +721,8 @@ where
                 |&i| self.hasher.hash_one(self.rangevec.lookup_str(i)),
             );
             match entry {
-                MutEntry::Occupied(e) => *e.get(),
-                MutEntry::Vacant(e) => {
+                EntryMut::Occupied(e) => *e.get(),
+                EntryMut::Vacant(e) => {
                     let id = self.rangevec.try_push_str_mut(value)?;
                     *e.insert(id).get()
                 }
@@ -876,7 +876,7 @@ where
                 entry.remove();
             }
             #[cfg(feature = "sync")]
-            if let MutEntry::Occupied(entry) = self.map.entry_mut(
+            if let EntryMut::Occupied(entry) = self.map.entry_mut(
                 hash,
                 |&i| self.rangevec.lookup_str(i) == value,
                 |&i| self.hasher.hash_one(self.rangevec.lookup_str(i)),

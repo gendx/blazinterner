@@ -9,7 +9,7 @@ categories = ["caching", "memory-management", "concurrency"]
 keywords = ["arena", "interning", "interner"]
 exclude = [".github/*"]
 edition = "2024"
-rust-version = "1.91.0"
+rust-version = "1.95.0"
 
 [package.metadata.docs.rs]
 features = ["debug", "delta", "get-size2", "postcard-schema", "raw", "retain", "serde", "std", "sync"]
@@ -30,7 +30,7 @@ sync = ["dep:appendvec", "dep:dashtable"]
 [dependencies]
 appendvec = { optional = true, version = "0.2.1" }
 bit-set = { optional = true, version = "0.11.1", default-features = false }
-dashtable = { optional = true, version = "0.2.1" }
+dashtable = { optional = true, version = "0.3.0" }
 either = { version = "1.19.0", default-features = false }
 get-size2 = { optional = true, version = "0.11.1", default-features = false, features = ["alloc", "derive", "hashbrown"] }
 hashbrown = "0.17.1"
