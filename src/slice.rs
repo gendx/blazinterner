@@ -1147,7 +1147,7 @@ where
     /// This function panics if the arena is full (based on the index type `I`).
     /// Use [`try_push_owned_mut`](Self::try_push_owned_mut) for a fallible API.
     #[cfg(feature = "raw")]
-    pub fn push_owned_mut(&mut self, value: Vec<T>) -> InternedSlice<T, H, I> {
+    pub fn push_owned_mut(&mut self, value: Vec<T>) -> I {
         match self.try_push_owned_mut(value) {
             Some(x) => x,
             None => panic!("Cannot intern in a full ArenaSlice"),
@@ -1163,7 +1163,7 @@ where
     /// This returns [`None`] if the arena is full (based on the index type
     /// `I`).
     #[cfg(feature = "raw")]
-    pub fn try_push_owned_mut(&mut self, value: Vec<T>) -> Option<InternedSlice<T, H, I>> {
+    pub fn try_push_owned_mut(&mut self, value: Vec<T>) -> Option<I> {
         #[cfg(not(feature = "sync"))]
         let id = self.try_push_mut_(value.len(), |rangevec| {
             let mut value = value;
@@ -1180,7 +1180,7 @@ where
         {
             *self.references.get_mut() += 1;
         }
-        Some(InternedSlice::new(id))
+        Some(id)
     }
 
     /// Unconditionally push a value, without validating that it's already
@@ -1194,7 +1194,7 @@ where
     /// This function panics if the arena is full (based on the index type `I`).
     /// Use [`try_push_array_mut`](Self::try_push_array_mut) for a fallible API.
     #[cfg(feature = "raw")]
-    pub fn push_array_mut<const N: usize>(&mut self, value: [T; N]) -> InternedSlice<T, H, I> {
+    pub fn push_array_mut<const N: usize>(&mut self, value: [T; N]) -> I {
         match self.try_push_array_mut(value) {
             Some(x) => x,
             None => panic!("Cannot intern in a full ArenaSlice"),
@@ -1210,10 +1210,7 @@ where
     /// This returns [`None`] if the arena is full (based on the index type
     /// `I`).
     #[cfg(feature = "raw")]
-    pub fn try_push_array_mut<const N: usize>(
-        &mut self,
-        value: [T; N],
-    ) -> Option<InternedSlice<T, H, I>> {
+    pub fn try_push_array_mut<const N: usize>(&mut self, value: [T; N]) -> Option<I> {
         #[cfg(not(feature = "sync"))]
         let id = self.try_push_mut_(N, |rangevec| {
             rangevec.vec.extend(value);
@@ -1226,7 +1223,7 @@ where
         {
             *self.references.get_mut() += 1;
         }
-        Some(InternedSlice::new(id))
+        Some(id)
     }
 
     /// Unconditionally push an iterator as a single contiguous value, without
@@ -1245,10 +1242,7 @@ where
     /// This function requires the iterator length to be correct. This is akin
     /// to the nightly-only [`TrustedLen`](core::iter::TrustedLen) trait.
     #[cfg(feature = "raw")]
-    pub unsafe fn push_iter_mut(
-        &mut self,
-        value: impl ExactSizeIterator<Item = T>,
-    ) -> InternedSlice<T, H, I> {
+    pub unsafe fn push_iter_mut(&mut self, value: impl ExactSizeIterator<Item = T>) -> I {
         // SAFETY: Simply forwarding to the crate-internal version.
         unsafe { self.push_iter_mut_(value) }
     }
@@ -1270,7 +1264,7 @@ where
     pub unsafe fn try_push_iter_mut(
         &mut self,
         value: impl ExactSizeIterator<Item = T>,
-    ) -> Option<InternedSlice<T, H, I>> {
+    ) -> Option<I> {
         // SAFETY: Simply forwarding to the crate-internal version.
         unsafe { self.try_push_iter_mut_(value) }
     }
@@ -1290,10 +1284,7 @@ where
     ///
     /// This function requires the iterator length to be correct. This is akin
     /// to the nightly-only [`TrustedLen`](core::iter::TrustedLen) trait.
-    pub(crate) unsafe fn push_iter_mut_(
-        &mut self,
-        value: impl ExactSizeIterator<Item = T>,
-    ) -> InternedSlice<T, H, I> {
+    pub(crate) unsafe fn push_iter_mut_(&mut self, value: impl ExactSizeIterator<Item = T>) -> I {
         // SAFETY: The caller ensures that the iterator length is correct.
         match unsafe { self.try_push_iter_mut_(value) } {
             Some(x) => x,
@@ -1317,7 +1308,7 @@ where
     pub(crate) unsafe fn try_push_iter_mut_(
         &mut self,
         value: impl ExactSizeIterator<Item = T>,
-    ) -> Option<InternedSlice<T, H, I>> {
+    ) -> Option<I> {
         #[cfg(not(feature = "sync"))]
         let id = self.try_push_mut_(value.len(), |rangevec| {
             rangevec.vec.extend(value);
@@ -1336,7 +1327,7 @@ where
         {
             *self.references.get_mut() += 1;
         }
-        Some(InternedSlice::new(id))
+        Some(id)
     }
 }
 
