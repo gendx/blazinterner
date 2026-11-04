@@ -348,7 +348,7 @@ where
     ///
     /// This function panics if the capacity exceeds the maximum allocation size
     /// for an arena indexed by `I`. Use
-    /// [`try_with_capacity`](Self::try_with_capacity) for a fallible API.
+    /// [`try_with_capacity()`](Self::try_with_capacity) for a fallible API.
     pub fn with_capacity(strings: usize, bytes: usize) -> Self {
         match Self::try_with_capacity(strings, bytes) {
             Some(x) => x,
@@ -796,7 +796,7 @@ impl<H, I: Index> ArenaStr<H, I> {
     /// This function panics if the interned handle is out of bounds for this
     /// arena, for example because the arena was truncated, or because the
     /// interned handle was deserialized from untrusted data. Use
-    /// [`try_lookup`](Self::try_lookup) for a fallible API.
+    /// [`try_lookup()`](Self::try_lookup) for a fallible API.
     pub fn lookup(&self, interned: InternedStr<H, I>) -> &str {
         self.lookup_str(interned.id)
     }
@@ -827,7 +827,7 @@ impl<H, I: Index> ArenaStr<H, I> {
     /// This function panics if the interned handle is out of bounds for this
     /// arena, for example because the arena was truncated, or because the
     /// interned handle was deserialized from untrusted data. Use
-    /// [`try_lookup_bytes`](Self::try_lookup_bytes) for a fallible API.
+    /// [`try_lookup_bytes()`](Self::try_lookup_bytes) for a fallible API.
     pub fn lookup_bytes(&self, interned: InternedStr<H, I>) -> &[u8] {
         self.rangevec.lookup_bytes(interned.id)
     }

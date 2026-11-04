@@ -315,7 +315,7 @@ where
     ///
     /// This function panics if the capacity exceeds the maximum allocation size
     /// for an arena indexed by `I`. Use
-    /// [`try_with_capacity`](Self::try_with_capacity) for a fallible API.
+    /// [`try_with_capacity()`](Self::try_with_capacity) for a fallible API.
     pub fn with_capacity(len: usize) -> Self {
         match Self::try_with_capacity(len) {
             Some(x) => x,
@@ -468,7 +468,7 @@ where
     /// # Panics
     ///
     /// This function panics if the arena is full (based on the index type `I`).
-    /// Use [`try_push_mut`](Self::try_push_mut) for a fallible API.
+    /// Use [`try_push_mut()`](Self::try_push_mut) for a fallible API.
     pub fn push_mut(&mut self, value: Storage) -> I {
         self.push(value)
     }
@@ -814,7 +814,7 @@ where
     /// This function panics if the interned handle is out of bounds for this
     /// arena, for example because the arena was truncated, or because the
     /// interned handle was deserialized from untrusted data. Use
-    /// [`try_lookup`](Self::try_lookup) for a fallible API.
+    /// [`try_lookup()`](Self::try_lookup) for a fallible API.
     pub fn lookup(&self, interned: Interned<T, Storage, H, I>) -> Storage {
         self.vec[interned.id.to_usize()].clone()
     }
@@ -858,7 +858,7 @@ where
     /// This function panics if the interned handle is out of bounds for this
     /// arena, for example because the arena was truncated, or because the
     /// interned handle was deserialized from untrusted data. Use
-    /// [`try_lookup_ref`](Self::try_lookup_ref) for a fallible API.
+    /// [`try_lookup_ref()`](Self::try_lookup_ref) for a fallible API.
     pub fn lookup_ref(&self, interned: Interned<T, Storage, H, I>) -> &T {
         self.vec[interned.id.to_usize()].borrow()
     }

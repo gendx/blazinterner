@@ -314,7 +314,7 @@ where
     ///
     /// This function panics if the capacity exceeds the maximum allocation size
     /// for an arena indexed by `I`. Use
-    /// [`try_with_capacity`](Self::try_with_capacity) for a fallible API.
+    /// [`try_with_capacity()`](Self::try_with_capacity) for a fallible API.
     pub fn with_capacity(slices: usize, items: usize) -> Self {
         match Self::try_with_capacity(slices, items) {
             Some(x) => x,
@@ -1145,7 +1145,8 @@ where
     /// # Panics
     ///
     /// This function panics if the arena is full (based on the index type `I`).
-    /// Use [`try_push_owned_mut`](Self::try_push_owned_mut) for a fallible API.
+    /// Use [`try_push_owned_mut()`](Self::try_push_owned_mut) for a fallible
+    /// API.
     #[cfg(feature = "raw")]
     pub fn push_owned_mut(&mut self, value: Vec<T>) -> I {
         match self.try_push_owned_mut(value) {
@@ -1192,7 +1193,8 @@ where
     /// # Panics
     ///
     /// This function panics if the arena is full (based on the index type `I`).
-    /// Use [`try_push_array_mut`](Self::try_push_array_mut) for a fallible API.
+    /// Use [`try_push_array_mut()`](Self::try_push_array_mut) for a fallible
+    /// API.
     #[cfg(feature = "raw")]
     pub fn push_array_mut<const N: usize>(&mut self, value: [T; N]) -> I {
         match self.try_push_array_mut(value) {
@@ -1235,7 +1237,7 @@ where
     /// # Panics
     ///
     /// This function panics if the arena is full (based on the index type `I`).
-    /// Use [`try_push_iter_mut`](Self::try_push_iter_mut) for a fallible API.
+    /// Use [`try_push_iter_mut()`](Self::try_push_iter_mut) for a fallible API.
     ///
     /// # Safety
     ///
@@ -1278,7 +1280,8 @@ where
     /// # Panics
     ///
     /// This function panics if the arena is full (based on the index type `I`).
-    /// Use [`try_push_iter_mut_`](Self::try_push_iter_mut_) for a fallible API.
+    /// Use [`try_push_iter_mut_()`](Self::try_push_iter_mut_) for a fallible
+    /// API.
     ///
     /// # Safety
     ///
@@ -1351,7 +1354,7 @@ where
     /// # Panics
     ///
     /// This function panics if the arena is full (based on the index type `I`).
-    /// Use [`try_intern`](Self::try_intern) for a fallible API.
+    /// Use [`try_intern()`](Self::try_intern) for a fallible API.
     #[cfg(feature = "sync")]
     pub fn intern(&self, value: &[T]) -> InternedSlice<T, H, I> {
         match self.try_intern(value) {
@@ -1406,7 +1409,7 @@ where
     /// # Panics
     ///
     /// This function panics if the arena is full (based on the index type `I`).
-    /// Use [`try_intern_mut`](Self::try_intern_mut) for a fallible API.
+    /// Use [`try_intern_mut()`](Self::try_intern_mut) for a fallible API.
     pub fn intern_mut(&mut self, value: &[T]) -> InternedSlice<T, H, I> {
         match self.try_intern_mut(value) {
             Some(x) => x,
@@ -1472,7 +1475,7 @@ where
     /// # Panics
     ///
     /// This function panics if the arena is full (based on the index type `I`).
-    /// Use [`try_push_mut`](Self::try_push_mut) for a fallible API.
+    /// Use [`try_push_mut()`](Self::try_push_mut) for a fallible API.
     #[cfg(feature = "raw")]
     pub fn push_mut(&mut self, value: &[T]) -> I {
         self.push(value)
@@ -1503,7 +1506,7 @@ where
     /// # Panics
     ///
     /// This function panics if the arena is full (based on the index type `I`).
-    /// Use [`try_push`](Self::try_push) for a fallible API.
+    /// Use [`try_push()`](Self::try_push) for a fallible API.
     pub(crate) fn push(&mut self, value: &[T]) -> I {
         match self.try_push(value) {
             Some(x) => x,
@@ -1559,7 +1562,7 @@ where
     /// # Panics
     ///
     /// This function panics if the arena is full (based on the index type `I`).
-    /// Use [`try_intern_copy`](Self::try_intern_copy) for a fallible API.
+    /// Use [`try_intern_copy()`](Self::try_intern_copy) for a fallible API.
     #[cfg(feature = "sync")]
     pub fn intern_copy(&self, value: &[T]) -> InternedSlice<T, H, I> {
         match self.try_intern_copy(value) {
@@ -1618,7 +1621,7 @@ where
     /// # Panics
     ///
     /// This function panics if the arena is full (based on the index type `I`).
-    /// Use [`try_intern_copy_mut`](Self::try_intern_copy_mut) for a fallible
+    /// Use [`try_intern_copy_mut()`](Self::try_intern_copy_mut) for a fallible
     /// API.
     pub fn intern_copy_mut(&mut self, value: &[T]) -> InternedSlice<T, H, I> {
         match self.try_intern_copy_mut(value) {
@@ -1690,7 +1693,7 @@ where
     /// # Panics
     ///
     /// This function panics if the arena is full (based on the index type `I`).
-    /// Use [`try_push_copy_mut`](Self::try_push_copy_mut) for a fallible API.
+    /// Use [`try_push_copy_mut()`](Self::try_push_copy_mut) for a fallible API.
     #[cfg(feature = "raw")]
     pub fn push_copy_mut(&mut self, value: &[T]) -> I {
         match self.try_push_copy_mut(value) {
@@ -1743,7 +1746,7 @@ impl<T, H, I: Index> ArenaSlice<T, H, I> {
     /// This function panics if the interned handle is out of bounds for this
     /// arena, for example because the arena was truncated, or because the
     /// interned handle was deserialized from untrusted data. Use
-    /// [`try_lookup`](Self::try_lookup) for a fallible API.
+    /// [`try_lookup()`](Self::try_lookup) for a fallible API.
     pub fn lookup(&self, interned: InternedSlice<T, H, I>) -> &[T] {
         self.lookup_slice(interned.id)
     }
