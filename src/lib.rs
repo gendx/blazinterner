@@ -10,19 +10,20 @@
 //!   [`Sized`] storage type (such as `Box<str>`) that can be borrowed as the
 //!   interned type.
 //! - **Efficient**: Each [`Interned`] value contains only a 32-bit index. The
-//!   corresponding [`Arena`] stores each value directly in an [`AppendVec`],
-//!   plus the 32-bit index in a raw hash table ([`DashTable`]). To intern a
-//!   value of type `T` using storage type `S`, you can pass any type that
-//!   implements [`Borrow<T>`](Borrow) and [`Into<S>`](Into), which allows
-//!   avoiding unnecessary copies. For example, in an `Arena<str, Box<str>>` you
-//!   can intern many string types: `&str`, `String`, `Box<str>`, `Cow<'_,
-//!   str>`, etc.
+//!   corresponding [`Arena`] stores each value directly in an
+//!   [`AppendVec`](appendvec::AppendVec), plus the 32-bit index in a raw hash
+//!   table ([`DashTable`]). To intern a value of type `T` using storage type
+//!   `S`, you can pass any type that implements [`Borrow<T>`](Borrow) and
+//!   [`Into<S>`](Into), which allows avoiding unnecessary copies. For example,
+//!   in an `Arena<str, Box<str>>` you can intern many string types: `&str`,
+//!   `String`, `Box<str>`, `Cow<'_, str>`, etc.
 //! - **Concurrent**: The [`Arena`] is [`Sync`], and allows simultaneous reads
 //!   and writes. More specifically, retrieving values via [`Arena::lookup()`]
 //!   and [`Arena::lookup_ref()`] is always wait-free, even when a write happens
-//!   concurrently! This is thanks to the underlying [`AppendVec`]
-//!   implementation. However, only one write (using [`Arena::intern()`]) can
-//!   happen at a time on a given arena, due to an exclusive write lock.
+//!   concurrently! This is thanks to the underlying
+//!   [`AppendVec`](appendvec::AppendVec) implementation. However, only one
+//!   write (using [`Arena::intern()`]) can happen at a time on a given arena,
+//!   due to an exclusive write lock.
 
 #![forbid(
     missing_docs,
@@ -42,13 +43,10 @@ mod index;
 mod mapping;
 mod slice;
 mod str;
+mod util;
 
 #[cfg(feature = "serde")]
 use alloc::format;
-#[cfg(not(feature = "sync"))]
-use alloc::vec::Vec;
-#[cfg(feature = "sync")]
-use appendvec::AppendVec;
 use core::borrow::Borrow;
 use core::cmp::Ordering;
 use core::fmt::Debug;
@@ -67,7 +65,7 @@ use get_size2::{GetSize, GetSizeTracker};
 #[cfg(not(feature = "sync"))]
 use hashbrown::HashTable;
 #[cfg(not(feature = "sync"))]
-use hashbrown::hash_table::Entry;
+use hashbrown::hash_table::Entry as EntryMut;
 pub use index::{Index, U16, U24, U32, U40, U48, U56, U64};
 pub use mapping::{ForwardMapping, Mapping, ReverseMapping};
 #[cfg(feature = "retain")]
@@ -82,7 +80,6 @@ use serde::de::Error;
 use serde::de::{DeserializeSeed, SeqAccess, Visitor};
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use slice::CopyRange;
 pub use slice::{ArenaSlice, InternedSlice, SnapshotSlice, SnapshotSliceMark};
 #[cfg(feature = "serde")]
 pub use slice::{ExtendArenaSlice, SnapshotSliceDiff};
@@ -93,6 +90,7 @@ use std::hash::RandomState;
 pub use str::{ArenaStr, InternedStr, SnapshotStr, SnapshotStrMark};
 #[cfg(feature = "serde")]
 pub use str::{ExtendArenaStr, SnapshotStrDiff};
+use util::IndexedVec;
 
 /// The default [`BuildHasher`] from the `hashbrown` crate.
 pub type HashbrownBuildHasher = hashbrown::DefaultHashBuilder;
@@ -272,10 +270,7 @@ where
 /// Trait`](https://doc.rust-lang.org/stable/std/keyword.dyn.html), you need to
 /// specify a [`Sized`] storage type, such as `Box<dyn Trait>`.
 pub struct Arena<T: ?Sized, Storage = T, H = DefaultBuildHasher, I = u32> {
-    #[cfg(not(feature = "sync"))]
-    vec: Vec<Storage>,
-    #[cfg(feature = "sync")]
-    vec: AppendVec<Storage>,
+    vec: IndexedVec<Storage, I>,
     #[cfg(not(feature = "sync"))]
     map: HashTable<I>,
     #[cfg(feature = "sync")]
@@ -332,14 +327,8 @@ where
     /// This returns [`None`] if the capacity exceeds the maximum allocation
     /// size for an arena indexed by `I`.
     pub fn try_with_capacity(len: usize) -> Option<Self> {
-        if len != 0 && len - 1 > I::MAX.to_usize() {
-            return None;
-        }
         Some(Self {
-            #[cfg(not(feature = "sync"))]
-            vec: Vec::with_capacity(len),
-            #[cfg(feature = "sync")]
-            vec: AppendVec::try_with_capacity(len)?,
+            vec: IndexedVec::try_with_capacity(len)?,
             #[cfg(not(feature = "sync"))]
             map: HashTable::with_capacity(len),
             #[cfg(feature = "sync")]
@@ -424,7 +413,7 @@ where
     pub fn find(&self, value: &T) -> Option<Interned<T, Storage, H, I>> {
         let hash = self.hasher.hash_one(value);
         self.map
-            .find(hash, |&i| self.vec[i.to_usize()].borrow() == value)
+            .find(hash, |&i| self.vec[i].borrow() == value)
             .map(|id| Interned::new(*id))
     }
 
@@ -441,12 +430,12 @@ where
         #[cfg(not(feature = "sync"))]
         return self
             .map
-            .find(hash, |&i| self.vec[i.to_usize()].borrow() == value)
+            .find(hash, |&i| self.vec[i].borrow() == value)
             .map(|id| Interned::new(*id));
         #[cfg(feature = "sync")]
         return self
             .map
-            .find_mut(hash, |&i| self.vec[i.to_usize()].borrow() == value)
+            .find_mut(hash, |&i| self.vec[i].borrow() == value)
             .map(|id| Interned::new(*id));
     }
 }
@@ -492,10 +481,7 @@ where
 {
     fn default() -> Self {
         Self {
-            #[cfg(not(feature = "sync"))]
-            vec: Vec::new(),
-            #[cfg(feature = "sync")]
-            vec: AppendVec::new(),
+            vec: IndexedVec::new(),
             #[cfg(not(feature = "sync"))]
             map: HashTable::new(),
             #[cfg(feature = "sync")]
@@ -634,15 +620,15 @@ where
         let hash = self.hasher.hash_one(value.borrow());
         let entry = self.map.entry(
             hash,
-            |&i| self.vec[i.to_usize()].borrow() == value.borrow(),
-            |&i| self.hasher.hash_one(self.vec[i.to_usize()].borrow()),
+            |&i| self.vec[i].borrow() == value.borrow(),
+            |&i| self.hasher.hash_one(self.vec[i].borrow()),
         );
         let id = match entry {
             Entry::Occupied(e) => *e.get(),
             Entry::Vacant(e) => {
                 let x: Storage = value.into();
-                let id = self.vec.try_push(x, I::MAX.to_usize())?;
-                *e.insert(I::from_usize(id)).get()
+                let id = self.vec.try_push(x)?;
+                *e.insert(id).get()
             }
         };
 
@@ -693,39 +679,23 @@ where
     ) -> Option<Interned<T, Storage, H, I>> {
         let hash = self.hasher.hash_one(value.borrow());
         #[cfg(not(feature = "sync"))]
-        let id = {
-            let entry = self.map.entry(
-                hash,
-                |&i| self.vec[i.to_usize()].borrow() == value.borrow(),
-                |&i| self.hasher.hash_one(self.vec[i.to_usize()].borrow()),
-            );
-            match entry {
-                Entry::Occupied(e) => *e.get(),
-                Entry::Vacant(e) => {
-                    let id = self.vec.len();
-                    if id > I::MAX.to_usize() {
-                        return None;
-                    }
-                    let x: Storage = value.into();
-                    self.vec.push(x);
-                    *e.insert(I::from_usize(id)).get()
-                }
-            }
-        };
+        let entry = self.map.entry(
+            hash,
+            |&i| self.vec[i].borrow() == value.borrow(),
+            |&i| self.hasher.hash_one(self.vec[i].borrow()),
+        );
         #[cfg(feature = "sync")]
-        let id = {
-            let entry = self.map.entry_mut(
-                hash,
-                |&i| self.vec[i.to_usize()].borrow() == value.borrow(),
-                |&i| self.hasher.hash_one(self.vec[i.to_usize()].borrow()),
-            );
-            match entry {
-                EntryMut::Occupied(e) => *e.get(),
-                EntryMut::Vacant(e) => {
-                    let x: Storage = value.into();
-                    let id = self.vec.try_push_mut(x, I::MAX.to_usize())?;
-                    *e.insert(I::from_usize(id)).get()
-                }
+        let entry = self.map.entry_mut(
+            hash,
+            |&i| self.vec[i].borrow() == value.borrow(),
+            |&i| self.hasher.hash_one(self.vec[i].borrow()),
+        );
+        let id = match entry {
+            EntryMut::Occupied(e) => *e.get(),
+            EntryMut::Vacant(e) => {
+                let x: Storage = value.into();
+                let id = self.vec.try_push_mut(x)?;
+                *e.insert(id).get()
             }
         };
 
@@ -764,28 +734,13 @@ where
     pub(crate) fn try_push(&mut self, value: Storage) -> Option<I> {
         let hash = self.hasher.hash_one(value.borrow());
 
+        let id = self.vec.try_push_mut(value)?;
         #[cfg(not(feature = "sync"))]
-        let id = {
-            let id = self.vec.len();
-            if id > I::MAX.to_usize() {
-                return None;
-            }
-            self.vec.push(value);
-            let id = I::from_usize(id);
-            self.map.insert_unique(hash, id, |&i| {
-                self.hasher.hash_one(self.vec[i.to_usize()].borrow())
-            });
-            id
-        };
+        self.map
+            .insert_unique(hash, id, |&i| self.hasher.hash_one(self.vec[i].borrow()));
         #[cfg(feature = "sync")]
-        let id = {
-            let id = self.vec.try_push_mut(value, I::MAX.to_usize())?;
-            let id = I::from_usize(id);
-            self.map.insert_unique_mut(hash, id, |&i| {
-                self.hasher.hash_one(self.vec[i.to_usize()].borrow())
-            });
-            id
-        };
+        self.map
+            .insert_unique_mut(hash, id, |&i| self.hasher.hash_one(self.vec[i].borrow()));
 
         #[cfg(feature = "debug")]
         {
@@ -816,7 +771,7 @@ where
     /// interned handle was deserialized from untrusted data. Use
     /// [`try_lookup()`](Self::try_lookup) for a fallible API.
     pub fn lookup(&self, interned: Interned<T, Storage, H, I>) -> Storage {
-        self.vec[interned.id.to_usize()].clone()
+        self.vec[interned.id].clone()
     }
 
     /// Retrieves the given [`Interned`] value from this arena.
@@ -831,11 +786,7 @@ where
     /// See also [`try_lookup_ref()`](Self::try_lookup_ref) if you only need a
     /// reference.
     pub fn try_lookup(&self, interned: Interned<T, Storage, H, I>) -> Option<Storage> {
-        let i = interned.id.to_usize();
-        #[cfg(not(feature = "sync"))]
-        let value = self.vec.get(i)?;
-        #[cfg(feature = "sync")]
-        let value = self.vec.try_index(i)?;
+        let value = self.vec.get(interned.id)?;
         Some(value.clone())
     }
 }
@@ -860,7 +811,7 @@ where
     /// interned handle was deserialized from untrusted data. Use
     /// [`try_lookup_ref()`](Self::try_lookup_ref) for a fallible API.
     pub fn lookup_ref(&self, interned: Interned<T, Storage, H, I>) -> &T {
-        self.vec[interned.id.to_usize()].borrow()
+        self.vec[interned.id].borrow()
     }
 
     /// Retrieves a reference to the given [`Interned`] value from this arena.
@@ -874,11 +825,7 @@ where
     ///
     /// See also [`try_lookup()`](Self::try_lookup) if you need an owned value.
     pub fn try_lookup_ref(&self, interned: Interned<T, Storage, H, I>) -> Option<&T> {
-        let i = interned.id.to_usize();
-        #[cfg(not(feature = "sync"))]
-        let value = self.vec.get(i)?;
-        #[cfg(feature = "sync")]
-        let value = self.vec.try_index(i)?;
+        let value = self.vec.get(interned.id)?;
         Some(value.borrow())
     }
 }
@@ -903,18 +850,18 @@ where
         for value in self.vec.iter().skip(snapshot.mark) {
             let hash = self.hasher.hash_one(value.borrow());
             #[cfg(not(feature = "sync"))]
-            if let Entry::Occupied(entry) = self.map.entry(
+            if let EntryMut::Occupied(entry) = self.map.entry(
                 hash,
-                |&i| self.vec[i.to_usize()].borrow() == value.borrow(),
-                |&i| self.hasher.hash_one(self.vec[i.to_usize()].borrow()),
+                |&i| self.vec[i].borrow() == value.borrow(),
+                |&i| self.hasher.hash_one(self.vec[i].borrow()),
             ) {
                 entry.remove();
             }
             #[cfg(feature = "sync")]
             if let EntryMut::Occupied(entry) = self.map.entry_mut(
                 hash,
-                |&i| self.vec[i.to_usize()].borrow() == value.borrow(),
-                |&i| self.hasher.hash_one(self.vec[i.to_usize()].borrow()),
+                |&i| self.vec[i].borrow() == value.borrow(),
+                |&i| self.hasher.hash_one(self.vec[i].borrow()),
             ) {
                 entry.remove();
             }

@@ -1,9 +1,8 @@
+use crate::util::{CopyRange, IndexedVec};
 use crate::{DefaultBuildHasher, Index};
 #[cfg(feature = "serde")]
 use alloc::format;
 use alloc::vec::Vec;
-#[cfg(feature = "sync")]
-use appendvec::AppendVec;
 use core::borrow::Borrow;
 #[cfg(feature = "serde")]
 use core::cell::Cell;
@@ -11,7 +10,6 @@ use core::cmp::Ordering;
 use core::fmt::Debug;
 use core::hash::{BuildHasher, Hash, Hasher};
 use core::marker::PhantomData;
-use core::ops::Range;
 #[cfg(feature = "debug")]
 use core::sync::atomic::{self, AtomicUsize};
 #[cfg(feature = "sync")]
@@ -23,7 +21,7 @@ use get_size2::{GetSize, GetSizeTracker};
 #[cfg(not(feature = "sync"))]
 use hashbrown::HashTable;
 #[cfg(not(feature = "sync"))]
-use hashbrown::hash_table::Entry;
+use hashbrown::hash_table::Entry as EntryMut;
 #[cfg(feature = "postcard-schema")]
 use postcard_schema::Schema;
 #[cfg(feature = "postcard-schema")]
@@ -34,28 +32,6 @@ use serde::de::{DeserializeSeed, Error, SeqAccess, Visitor};
 use serde::ser::{SerializeSeq, SerializeTuple};
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[cfg_attr(feature = "get-size2", derive(GetSize))]
-pub struct CopyRange<I> {
-    pub start: I,
-    pub end: I,
-}
-
-impl<I> From<Range<I>> for CopyRange<I> {
-    fn from(other: Range<I>) -> Self {
-        Self {
-            start: other.start,
-            end: other.end,
-        }
-    }
-}
-
-impl<I> From<CopyRange<I>> for Range<I> {
-    fn from(other: CopyRange<I>) -> Self {
-        other.start..other.end
-    }
-}
 
 /// A handle to an interned value in an [`ArenaSlice`].
 pub struct InternedSlice<T, H = DefaultBuildHasher, I = u32> {
@@ -200,66 +176,32 @@ where
 
 #[cfg_attr(feature = "get-size2", derive(GetSize))]
 struct RangeVec<T, I> {
-    #[cfg(not(feature = "sync"))]
-    vec: Vec<T>,
-    #[cfg(feature = "sync")]
-    vec: AppendVec<T>,
-    #[cfg(not(feature = "sync"))]
-    ranges: Vec<CopyRange<I>>,
-    #[cfg(feature = "sync")]
-    ranges: AppendVec<CopyRange<I>>,
+    vec: IndexedVec<T, I>,
+    ranges: IndexedVec<CopyRange<I>, I>,
 }
 
 impl<T, I: Index> RangeVec<T, I> {
     fn lookup_slice(&self, id: I) -> &[T] {
-        let range = self.ranges[id.to_usize()];
-        let range = range.start.to_usize()..range.end.to_usize();
+        let range = self.ranges[id];
         &self.vec[range]
     }
 
     fn try_lookup_slice(&self, id: I) -> Option<&[T]> {
-        let i = id.to_usize();
-        #[cfg(not(feature = "sync"))]
-        let range = self.ranges.get(i)?;
-        #[cfg(feature = "sync")]
-        let range = self.ranges.try_index(i)?;
-        let range = range.start.to_usize()..range.end.to_usize();
-        Some(&self.vec[range])
+        let range = self.ranges.get(id)?;
+        Some(&self.vec[*range])
     }
 
     fn iter(&self) -> impl ExactSizeIterator<Item = &[T]> {
-        self.ranges
-            .iter()
-            .map(|&range| &self.vec[range.start.to_usize()..range.end.to_usize()])
+        self.ranges.iter().map(|&range| &self.vec[range])
     }
 
     #[cfg(feature = "sync")]
-    fn try_push_range(&self, range: Range<usize>) -> Option<I> {
-        assert!(range.start <= I::MAX.to_usize());
-        assert!(range.end <= I::MAX.to_usize());
-        let range = I::from_usize(range.start)..I::from_usize(range.end);
-
-        let id = self.ranges.try_push(range.into(), I::MAX.to_usize())?;
-        Some(I::from_usize(id))
+    fn try_push_range(&self, range: CopyRange<I>) -> Option<I> {
+        self.ranges.try_push(range)
     }
 
-    fn try_push_range_mut(&mut self, range: Range<usize>) -> Option<I> {
-        assert!(range.start <= I::MAX.to_usize());
-        assert!(range.end <= I::MAX.to_usize());
-        let range = I::from_usize(range.start)..I::from_usize(range.end);
-
-        #[cfg(not(feature = "sync"))]
-        let id = {
-            let id = self.ranges.len();
-            if id > I::MAX.to_usize() {
-                return None;
-            }
-            self.ranges.push(range.into());
-            id
-        };
-        #[cfg(feature = "sync")]
-        let id = self.ranges.try_push_mut(range.into(), I::MAX.to_usize())?;
-        Some(I::from_usize(id))
+    fn try_push_range_mut(&mut self, range: CopyRange<I>) -> Option<I> {
+        self.ranges.try_push_mut(range)
     }
 
     fn truncate(&mut self, len: usize) {
@@ -331,19 +273,10 @@ where
     /// This returns [`None`] if the capacity exceeds the maximum allocation
     /// size for an arena indexed by `I`.
     pub fn try_with_capacity(slices: usize, items: usize) -> Option<Self> {
-        if (slices != 0 && slices - 1 > I::MAX.to_usize()) || items > I::MAX.to_usize() {
-            return None;
-        }
         Some(Self {
-            #[cfg(not(feature = "sync"))]
             rangevec: RangeVec {
-                vec: Vec::with_capacity(items),
-                ranges: Vec::with_capacity(slices),
-            },
-            #[cfg(feature = "sync")]
-            rangevec: RangeVec {
-                vec: AppendVec::try_with_capacity(items)?,
-                ranges: AppendVec::try_with_capacity(slices)?,
+                vec: IndexedVec::try_with_capacity_slices(items)?,
+                ranges: IndexedVec::try_with_capacity(slices)?,
             },
             #[cfg(not(feature = "sync"))]
             map: HashTable::with_capacity(slices),
@@ -485,15 +418,9 @@ where
 {
     fn default() -> Self {
         Self {
-            #[cfg(not(feature = "sync"))]
             rangevec: RangeVec {
-                vec: Vec::new(),
-                ranges: Vec::new(),
-            },
-            #[cfg(feature = "sync")]
-            rangevec: RangeVec {
-                vec: AppendVec::new(),
-                ranges: AppendVec::new(),
+                vec: IndexedVec::new(),
+                ranges: IndexedVec::new(),
             },
             #[cfg(not(feature = "sync"))]
             map: HashTable::new(),
@@ -611,22 +538,11 @@ impl<T, H, I> ArenaSlice<T, H, I>
 where
     I: Index,
 {
-    #[cfg(not(feature = "sync"))]
-    #[inline(always)]
-    fn check_slice_limit(start: usize, len: usize) -> Option<()> {
-        let limit = I::MAX.to_usize();
-        if len > limit || start > limit - len {
-            None
-        } else {
-            Some(())
-        }
-    }
-
     #[cfg(feature = "sync")]
     fn try_insert(
         entry: Entry<'_, I>,
         rangevec: &RangeVec<T, I>,
-        try_insert: impl FnOnce(&RangeVec<T, I>) -> Option<Range<usize>>,
+        try_insert: impl FnOnce(&RangeVec<T, I>) -> Option<CopyRange<I>>,
     ) -> Option<I> {
         let id = match entry {
             Entry::Occupied(e) => *e.get(),
@@ -639,35 +555,10 @@ where
         Some(id)
     }
 
-    #[cfg(not(feature = "sync"))]
-    fn try_insert_mut(
-        entry: Entry<'_, I>,
-        rangevec: &mut RangeVec<T, I>,
-        slice_len: usize,
-        insert: impl FnOnce(&mut RangeVec<T, I>),
-    ) -> Option<I> {
-        let id = match entry {
-            Entry::Occupied(e) => *e.get(),
-            Entry::Vacant(e) => {
-                let range = {
-                    let start = rangevec.vec.len();
-                    Self::check_slice_limit(start, slice_len)?;
-                    insert(rangevec);
-                    let end = rangevec.vec.len();
-                    start..end
-                };
-                let id = rangevec.try_push_range_mut(range)?;
-                *e.insert(id).get()
-            }
-        };
-        Some(id)
-    }
-
-    #[cfg(feature = "sync")]
     fn try_insert_mut(
         entry: EntryMut<'_, I>,
         rangevec: &mut RangeVec<T, I>,
-        try_insert: impl FnOnce(&mut RangeVec<T, I>) -> Option<Range<usize>>,
+        try_insert: impl FnOnce(&mut RangeVec<T, I>) -> Option<CopyRange<I>>,
     ) -> Option<I> {
         let id = match entry {
             EntryMut::Occupied(e) => *e.get(),
@@ -687,37 +578,19 @@ where
     H: BuildHasher,
     I: Index,
 {
-    #[cfg(not(feature = "sync"))]
     fn try_push_mut_(
         &mut self,
-        slice_len: usize,
-        insert: impl FnOnce(&mut RangeVec<T, I>),
+        try_insert: impl FnOnce(&mut RangeVec<T, I>) -> Option<CopyRange<I>>,
     ) -> Option<I> {
-        let range = {
-            let start = self.rangevec.vec.len();
-            Self::check_slice_limit(start, slice_len)?;
-            insert(&mut self.rangevec);
-            let end = self.rangevec.vec.len();
-            start..end
-        };
-        let id = self.rangevec.try_push_range_mut(range.clone())?;
+        let range = try_insert(&mut self.rangevec)?;
+        let id = self.rangevec.try_push_range_mut(range)?;
 
         let hash = self.hash_slice(&self.rangevec.vec[range]);
+        #[cfg(not(feature = "sync"))]
         self.map.insert_unique(hash, id, |&i| {
             Self::hash_iter(&self.hasher, self.rangevec.lookup_slice(i))
         });
-        Some(id)
-    }
-
-    #[cfg(feature = "sync")]
-    fn try_push_mut_(
-        &mut self,
-        try_insert: impl FnOnce(&mut RangeVec<T, I>) -> Option<Range<usize>>,
-    ) -> Option<I> {
-        let range = try_insert(&mut self.rangevec)?;
-        let id = self.rangevec.try_push_range_mut(range.clone())?;
-
-        let hash = self.hash_slice(&self.rangevec.vec[range]);
+        #[cfg(feature = "sync")]
         self.map.insert_unique_mut(hash, id, |&i| {
             Self::hash_iter(&self.hasher, self.rangevec.lookup_slice(i))
         });
@@ -772,7 +645,7 @@ where
             |&i| self.hash_slice(self.lookup_slice(i)),
         );
         let id = Self::try_insert(entry, &self.rangevec, |rangevec| {
-            rangevec.vec.try_push_owned_slice(value, I::MAX.to_usize())
+            rangevec.vec.try_push_owned_slice(value)
         })?;
 
         #[cfg(feature = "debug")]
@@ -821,9 +694,9 @@ where
                 |&i| self.rangevec.lookup_slice(i) == value,
                 |&i| Self::hash_iter(&self.hasher, self.rangevec.lookup_slice(i)),
             );
-            Self::try_insert_mut(entry, &mut self.rangevec, value.len(), |rangevec| {
+            Self::try_insert_mut(entry, &mut self.rangevec, |rangevec| {
                 let mut value = value;
-                rangevec.vec.append(&mut value);
+                rangevec.vec.try_append(&mut value)
             })?
         };
         #[cfg(feature = "sync")]
@@ -834,9 +707,7 @@ where
                 |&i| Self::hash_iter(&self.hasher, self.rangevec.lookup_slice(i)),
             );
             Self::try_insert_mut(entry, &mut self.rangevec, |rangevec| {
-                rangevec
-                    .vec
-                    .try_push_owned_slice_mut(value, I::MAX.to_usize())
+                rangevec.vec.try_push_owned_slice_mut(value)
             })?
         };
 
@@ -891,7 +762,7 @@ where
             |&i| self.hash_slice(self.lookup_slice(i)),
         );
         let id = Self::try_insert(entry, &self.rangevec, |rangevec| {
-            rangevec.vec.try_push_array(value, I::MAX.to_usize())
+            rangevec.vec.try_push_array(value)
         })?;
 
         #[cfg(feature = "debug")]
@@ -943,8 +814,8 @@ where
                 |&i| self.rangevec.lookup_slice(i) == value,
                 |&i| Self::hash_iter(&self.hasher, self.rangevec.lookup_slice(i)),
             );
-            Self::try_insert_mut(entry, &mut self.rangevec, N, |rangevec| {
-                rangevec.vec.extend(value);
+            Self::try_insert_mut(entry, &mut self.rangevec, |rangevec| {
+                rangevec.vec.try_extend_array(value)
             })?
         };
         #[cfg(feature = "sync")]
@@ -955,7 +826,7 @@ where
                 |&i| Self::hash_iter(&self.hasher, self.rangevec.lookup_slice(i)),
             );
             Self::try_insert_mut(entry, &mut self.rangevec, |rangevec| {
-                rangevec.vec.try_push_array_mut(value, I::MAX.to_usize())
+                rangevec.vec.try_push_array_mut(value)
             })?
         };
 
@@ -1031,7 +902,7 @@ where
         );
         let id = Self::try_insert(entry, &self.rangevec, |rangevec| {
             // SAFETY: The caller ensures that the iterator length is correct.
-            unsafe { rangevec.vec.try_push_contiguous(value, I::MAX.to_usize()) }
+            unsafe { rangevec.vec.try_push_contiguous(value) }
         })?;
 
         #[cfg(feature = "debug")]
@@ -1103,8 +974,10 @@ where
                 },
                 |&i| Self::hash_iter(&self.hasher, self.rangevec.lookup_slice(i)),
             );
-            Self::try_insert_mut(entry, &mut self.rangevec, value.len(), |rangevec| {
-                rangevec.vec.extend(value);
+            Self::try_insert_mut(entry, &mut self.rangevec, |rangevec| {
+                // SAFETY: The caller ensures that the iterator length is
+                // correct.
+                unsafe { rangevec.vec.try_extend(value) }
             })?
         };
         #[cfg(feature = "sync")]
@@ -1121,11 +994,7 @@ where
             Self::try_insert_mut(entry, &mut self.rangevec, |rangevec| {
                 // SAFETY: The caller ensures that the iterator length is
                 // correct.
-                unsafe {
-                    rangevec
-                        .vec
-                        .try_push_contiguous_mut(value, I::MAX.to_usize())
-                }
+                unsafe { rangevec.vec.try_push_contiguous_mut(value) }
             })?
         };
 
@@ -1165,16 +1034,14 @@ where
     /// `I`).
     #[cfg(feature = "raw")]
     pub fn try_push_owned_mut(&mut self, value: Vec<T>) -> Option<I> {
-        #[cfg(not(feature = "sync"))]
-        let id = self.try_push_mut_(value.len(), |rangevec| {
-            let mut value = value;
-            rangevec.vec.append(&mut value);
-        })?;
-        #[cfg(feature = "sync")]
         let id = self.try_push_mut_(|rangevec| {
-            rangevec
-                .vec
-                .try_push_owned_slice_mut(value, I::MAX.to_usize())
+            #[cfg(not(feature = "sync"))]
+            {
+                let mut value = value;
+                rangevec.vec.try_append(&mut value)
+            }
+            #[cfg(feature = "sync")]
+            return rangevec.vec.try_push_owned_slice_mut(value);
         })?;
 
         #[cfg(feature = "debug")]
@@ -1213,13 +1080,12 @@ where
     /// `I`).
     #[cfg(feature = "raw")]
     pub fn try_push_array_mut<const N: usize>(&mut self, value: [T; N]) -> Option<I> {
-        #[cfg(not(feature = "sync"))]
-        let id = self.try_push_mut_(N, |rangevec| {
-            rangevec.vec.extend(value);
+        let id = self.try_push_mut_(|rangevec| {
+            #[cfg(not(feature = "sync"))]
+            return rangevec.vec.try_extend_array(value);
+            #[cfg(feature = "sync")]
+            return rangevec.vec.try_push_array_mut(value);
         })?;
-        #[cfg(feature = "sync")]
-        let id = self
-            .try_push_mut_(|rangevec| rangevec.vec.try_push_array_mut(value, I::MAX.to_usize()))?;
 
         #[cfg(feature = "debug")]
         {
@@ -1312,18 +1178,13 @@ where
         &mut self,
         value: impl ExactSizeIterator<Item = T>,
     ) -> Option<I> {
-        #[cfg(not(feature = "sync"))]
-        let id = self.try_push_mut_(value.len(), |rangevec| {
-            rangevec.vec.extend(value);
-        })?;
-        #[cfg(feature = "sync")]
         let id = self.try_push_mut_(|rangevec| {
             // SAFETY: The caller ensures that the iterator length is correct.
-            unsafe {
-                rangevec
-                    .vec
-                    .try_push_contiguous_mut(value, I::MAX.to_usize())
-            }
+            #[cfg(not(feature = "sync"))]
+            return unsafe { rangevec.vec.try_extend(value) };
+            // SAFETY: The caller ensures that the iterator length is correct.
+            #[cfg(feature = "sync")]
+            return unsafe { rangevec.vec.try_push_contiguous_mut(value) };
         })?;
 
         #[cfg(feature = "debug")]
@@ -1386,7 +1247,7 @@ where
             |&i| self.hash_slice(self.lookup_slice(i)),
         );
         let id = Self::try_insert(entry, &self.rangevec, |rangevec| {
-            rangevec.vec.try_push_slice(value, I::MAX.to_usize())
+            rangevec.vec.try_push_slice(value)
         })?;
 
         #[cfg(feature = "debug")]
@@ -1440,8 +1301,8 @@ where
                 |&i| self.rangevec.lookup_slice(i) == value,
                 |&i| Self::hash_iter(&self.hasher, self.rangevec.lookup_slice(i)),
             );
-            Self::try_insert_mut(entry, &mut self.rangevec, value.len(), |rangevec| {
-                rangevec.vec.extend_from_slice(value);
+            Self::try_insert_mut(entry, &mut self.rangevec, |rangevec| {
+                rangevec.vec.try_extend_from_slice(value)
             })?
         };
         #[cfg(feature = "sync")]
@@ -1452,7 +1313,7 @@ where
                 |&i| Self::hash_iter(&self.hasher, self.rangevec.lookup_slice(i)),
             );
             Self::try_insert_mut(entry, &mut self.rangevec, |rangevec| {
-                rangevec.vec.try_push_slice_mut(value, I::MAX.to_usize())
+                rangevec.vec.try_push_slice_mut(value)
             })?
         };
 
@@ -1523,13 +1384,12 @@ where
     /// This returns [`None`] if the arena is full (based on the index type
     /// `I`).
     pub(crate) fn try_push(&mut self, value: &[T]) -> Option<I> {
-        #[cfg(not(feature = "sync"))]
-        let id = self.try_push_mut_(value.len(), |rangevec| {
-            rangevec.vec.extend_from_slice(value);
+        let id = self.try_push_mut_(|rangevec| {
+            #[cfg(not(feature = "sync"))]
+            return rangevec.vec.try_extend_from_slice(value);
+            #[cfg(feature = "sync")]
+            return rangevec.vec.try_push_slice_mut(value);
         })?;
-        #[cfg(feature = "sync")]
-        let id = self
-            .try_push_mut_(|rangevec| rangevec.vec.try_push_slice_mut(value, I::MAX.to_usize()))?;
 
         #[cfg(feature = "debug")]
         {
@@ -1596,7 +1456,7 @@ where
             |&i| self.hash_slice(self.lookup_slice(i)),
         );
         let id = Self::try_insert(entry, &self.rangevec, |rangevec| {
-            rangevec.vec.try_push_slice_copy(value, I::MAX.to_usize())
+            rangevec.vec.try_push_slice_copy(value)
         })?;
 
         #[cfg(feature = "debug")]
@@ -1656,8 +1516,8 @@ where
                 |&i| self.rangevec.lookup_slice(i) == value,
                 |&i| Self::hash_iter(&self.hasher, self.rangevec.lookup_slice(i)),
             );
-            Self::try_insert_mut(entry, &mut self.rangevec, value.len(), |rangevec| {
-                rangevec.vec.extend_from_slice(value);
+            Self::try_insert_mut(entry, &mut self.rangevec, |rangevec| {
+                rangevec.vec.try_extend_from_slice(value)
             })?
         };
         #[cfg(feature = "sync")]
@@ -1668,9 +1528,7 @@ where
                 |&i| Self::hash_iter(&self.hasher, self.rangevec.lookup_slice(i)),
             );
             Self::try_insert_mut(entry, &mut self.rangevec, |rangevec| {
-                rangevec
-                    .vec
-                    .try_push_slice_copy_mut(value, I::MAX.to_usize())
+                rangevec.vec.try_push_slice_copy_mut(value)
             })?
         };
 
@@ -1715,15 +1573,11 @@ where
     /// [`try_push_mut()`](Self::try_push_mut) instead.
     #[cfg(feature = "raw")]
     pub fn try_push_copy_mut(&mut self, value: &[T]) -> Option<I> {
-        #[cfg(not(feature = "sync"))]
-        let id = self.try_push_mut_(value.len(), |rangevec| {
-            rangevec.vec.extend_from_slice(value);
-        })?;
-        #[cfg(feature = "sync")]
         let id = self.try_push_mut_(|rangevec| {
-            rangevec
-                .vec
-                .try_push_slice_copy_mut(value, I::MAX.to_usize())
+            #[cfg(not(feature = "sync"))]
+            return rangevec.vec.try_extend_from_slice(value);
+            #[cfg(feature = "sync")]
+            return rangevec.vec.try_push_slice_copy_mut(value);
         })?;
 
         #[cfg(feature = "debug")]
@@ -1784,11 +1638,11 @@ where
             return;
         }
 
-        for range in self.rangevec.ranges.iter().skip(snapshot.mark) {
-            let slice = &self.rangevec.vec[range.start.to_usize()..range.end.to_usize()];
+        for &range in self.rangevec.ranges.iter().skip(snapshot.mark) {
+            let slice = &self.rangevec.vec[range];
             let hash = self.hash_slice(slice);
             #[cfg(not(feature = "sync"))]
-            if let Entry::Occupied(entry) = self.map.entry(
+            if let EntryMut::Occupied(entry) = self.map.entry(
                 hash,
                 |&i| self.rangevec.lookup_slice(i) == slice,
                 |&i| Self::hash_iter(&self.hasher, self.rangevec.lookup_slice(i)),
@@ -1858,10 +1712,7 @@ where
 
 #[cfg(feature = "serde")]
 pub(crate) struct RangeWrapper<'a, I> {
-    #[cfg(not(feature = "sync"))]
-    ranges: &'a [CopyRange<I>],
-    #[cfg(feature = "sync")]
-    ranges: &'a AppendVec<CopyRange<I>>,
+    ranges: &'a IndexedVec<CopyRange<I>, I>,
     ranges_len: Cell<I>,
     total_len: Cell<I>,
 }
@@ -1871,10 +1722,7 @@ impl<'a, I> RangeWrapper<'a, I>
 where
     I: Index,
 {
-    pub fn new(
-        #[cfg(not(feature = "sync"))] ranges: &'a [CopyRange<I>],
-        #[cfg(feature = "sync")] ranges: &'a AppendVec<CopyRange<I>>,
-    ) -> Self {
+    pub fn new(ranges: &'a IndexedVec<CopyRange<I>, I>) -> Self {
         Self {
             ranges,
             ranges_len: Cell::new(I::ZERO),
@@ -1934,8 +1782,8 @@ where
     {
         let mut seq = serializer.serialize_seq(Some(self.total_len.to_usize()))?;
 
-        for range in self.rangevec.ranges.iter().take(self.ranges_len.to_usize()) {
-            let slice = &self.rangevec.vec[range.start.to_usize()..range.end.to_usize()];
+        for &range in self.rangevec.ranges.iter().take(self.ranges_len.to_usize()) {
+            let slice = &self.rangevec.vec[range];
             for t in slice {
                 seq.serialize_element(t)?;
             }
@@ -2141,10 +1989,7 @@ where
 
 #[cfg(feature = "serde")]
 pub(crate) struct SnapshotRangeWrapper<'a, I> {
-    #[cfg(not(feature = "sync"))]
-    ranges: &'a [CopyRange<I>],
-    #[cfg(feature = "sync")]
-    ranges: &'a AppendVec<CopyRange<I>>,
+    ranges: &'a IndexedVec<CopyRange<I>, I>,
     start: usize,
     end: usize,
     total_len: Cell<I>,
@@ -2155,12 +2000,7 @@ impl<'a, I> SnapshotRangeWrapper<'a, I>
 where
     I: Index,
 {
-    pub fn new(
-        #[cfg(not(feature = "sync"))] ranges: &'a [CopyRange<I>],
-        #[cfg(feature = "sync")] ranges: &'a AppendVec<CopyRange<I>>,
-        start: usize,
-        end: usize,
-    ) -> Self {
+    pub fn new(ranges: &'a IndexedVec<CopyRange<I>, I>, start: usize, end: usize) -> Self {
         Self {
             ranges,
             start,
@@ -2222,8 +2062,8 @@ where
     {
         let mut seq = serializer.serialize_seq(Some(self.total_len.to_usize()))?;
 
-        for range in self.rangevec.ranges.iter().take(self.end).skip(self.start) {
-            let slice = &self.rangevec.vec[range.start.to_usize()..range.end.to_usize()];
+        for &range in self.rangevec.ranges.iter().take(self.end).skip(self.start) {
+            let slice = &self.rangevec.vec[range];
             for t in slice {
                 seq.serialize_element(t)?;
             }
@@ -2382,8 +2222,8 @@ mod delta {
             let mut seq = serializer.serialize_seq(Some(self.total_len.to_usize()))?;
 
             let mut acc = Accum::default();
-            for range in self.rangevec.ranges.iter().take(self.ranges_len.to_usize()) {
-                let slice = &self.rangevec.vec[range.start.to_usize()..range.end.to_usize()];
+            for &range in self.rangevec.ranges.iter().take(self.ranges_len.to_usize()) {
+                let slice = &self.rangevec.vec[range];
                 let delta = acc.fold(slice);
                 assert_eq!(
                     delta.len(),

@@ -1,14 +1,13 @@
-use crate::{CopyRange, DefaultBuildHasher, Index};
+use crate::util::{CopyRange, IndexedStr, IndexedVec};
+use crate::{DefaultBuildHasher, Index};
 #[cfg(feature = "serde")]
 use crate::{RangeWrapper, SnapshotRangeWrapper};
 #[cfg(feature = "serde")]
 use alloc::format;
-#[cfg(any(feature = "serde", not(feature = "sync")))]
+#[cfg(feature = "serde")]
 use alloc::string::String;
-#[cfg(any(feature = "serde", not(feature = "sync")))]
+#[cfg(feature = "serde")]
 use alloc::vec::Vec;
-#[cfg(feature = "sync")]
-use appendvec::{AppendStr, AppendVec};
 use core::cmp::Ordering;
 use core::fmt::Debug;
 use core::hash::{BuildHasher, Hash, Hasher};
@@ -182,119 +181,48 @@ where
 
 #[cfg_attr(feature = "get-size2", derive(GetSize))]
 struct RangeVecStr<I> {
-    #[cfg(not(feature = "sync"))]
-    vec: String,
-    #[cfg(feature = "sync")]
-    vec: AppendStr,
-    #[cfg(not(feature = "sync"))]
-    ranges: Vec<CopyRange<I>>,
-    #[cfg(feature = "sync")]
-    ranges: AppendVec<CopyRange<I>>,
+    vec: IndexedStr<I>,
+    ranges: IndexedVec<CopyRange<I>, I>,
 }
 
 impl<I: Index> RangeVecStr<I> {
     fn lookup_bytes(&self, id: I) -> &[u8] {
-        let range = self.ranges[id.to_usize()];
-        let range = range.start.to_usize()..range.end.to_usize();
-        #[cfg(not(feature = "sync"))]
-        return &self.vec.as_bytes()[range];
-        #[cfg(feature = "sync")]
-        return self.vec.get_bytes(range);
+        let range = self.ranges[id];
+        self.vec.get_bytes(range)
     }
 
     fn try_lookup_bytes(&self, id: I) -> Option<&[u8]> {
-        let i = id.to_usize();
-        #[cfg(not(feature = "sync"))]
-        let range = self.ranges.get(i)?;
-        #[cfg(feature = "sync")]
-        let range = self.ranges.try_index(i)?;
-        let range = range.start.to_usize()..range.end.to_usize();
-        #[cfg(not(feature = "sync"))]
-        return Some(&self.vec.as_bytes()[range]);
-        #[cfg(feature = "sync")]
-        return Some(self.vec.get_bytes(range));
+        let range = self.ranges.get(id)?;
+        Some(self.vec.get_bytes(*range))
     }
 
     fn lookup_str(&self, id: I) -> &str {
-        let range = self.ranges[id.to_usize()];
-        let range = range.start.to_usize()..range.end.to_usize();
+        let range = self.ranges[id];
         &self.vec[range]
     }
 
     fn try_lookup_str(&self, id: I) -> Option<&str> {
-        let i = id.to_usize();
-        #[cfg(not(feature = "sync"))]
-        let range = self.ranges.get(i)?;
-        #[cfg(feature = "sync")]
-        let range = self.ranges.try_index(i)?;
-        let range = range.start.to_usize()..range.end.to_usize();
-        Some(&self.vec[range])
+        let range = self.ranges.get(id)?;
+        Some(&self.vec[*range])
     }
 
     fn iter(&self) -> impl ExactSizeIterator<Item = &str> {
-        self.ranges
-            .iter()
-            .map(|&range| &self.vec[range.start.to_usize()..range.end.to_usize()])
+        self.ranges.iter().map(|&range| &self.vec[range])
     }
 
     fn iter_bytes(&self) -> impl ExactSizeIterator<Item = &[u8]> {
-        #[cfg(not(feature = "sync"))]
-        let bytes = self.vec.as_bytes();
-        self.ranges.iter().map(|&range| {
-            #[cfg(not(feature = "sync"))]
-            return &bytes[range.start.to_usize()..range.end.to_usize()];
-            #[cfg(feature = "sync")]
-            return self
-                .vec
-                .get_bytes(range.start.to_usize()..range.end.to_usize());
-        })
+        self.ranges.iter().map(|&range| self.vec.get_bytes(range))
     }
 
     #[cfg(feature = "sync")]
     fn try_push_str(&self, value: &str) -> Option<I> {
-        let range = self.vec.try_push_str(value, I::MAX.to_usize())?;
-        let range = I::from_usize(range.start)..I::from_usize(range.end);
-
-        let id = self.ranges.try_push(range.into(), I::MAX.to_usize())?;
-        Some(I::from_usize(id))
+        let range = self.vec.try_push_str(value)?;
+        self.ranges.try_push(range)
     }
 
     fn try_push_str_mut(&mut self, value: &str) -> Option<I> {
-        #[cfg(not(feature = "sync"))]
-        let range = {
-            let start = self.vec.len();
-            Self::check_slice_limit(start, value.len())?;
-            self.vec.push_str(value);
-            let end = self.vec.len();
-            start..end
-        };
-        #[cfg(feature = "sync")]
-        let range = self.vec.try_push_str_mut(value, I::MAX.to_usize())?;
-        let range = I::from_usize(range.start)..I::from_usize(range.end);
-
-        #[cfg(not(feature = "sync"))]
-        let id = {
-            let id = self.ranges.len();
-            if id > I::MAX.to_usize() {
-                return None;
-            }
-            self.ranges.push(range.into());
-            id
-        };
-        #[cfg(feature = "sync")]
-        let id = self.ranges.try_push_mut(range.into(), I::MAX.to_usize())?;
-        Some(I::from_usize(id))
-    }
-
-    #[cfg(not(feature = "sync"))]
-    #[inline(always)]
-    fn check_slice_limit(start: usize, len: usize) -> Option<()> {
-        let limit = I::MAX.to_usize();
-        if len > limit || start > limit - len {
-            None
-        } else {
-            Some(())
-        }
+        let range = self.vec.try_push_str_mut(value)?;
+        self.ranges.try_push_mut(range)
     }
 
     fn truncate(&mut self, len: usize) {
@@ -365,19 +293,10 @@ where
     /// This returns [`None`] if the capacity exceeds the maximum allocation
     /// size for an arena indexed by `I`.
     pub fn try_with_capacity(strings: usize, bytes: usize) -> Option<Self> {
-        if (strings != 0 && strings - 1 > I::MAX.to_usize()) || bytes > I::MAX.to_usize() {
-            return None;
-        }
         Some(Self {
-            #[cfg(not(feature = "sync"))]
             rangevec: RangeVecStr {
-                vec: String::with_capacity(bytes),
-                ranges: Vec::with_capacity(strings),
-            },
-            #[cfg(feature = "sync")]
-            rangevec: RangeVecStr {
-                vec: AppendStr::try_with_capacity(bytes)?,
-                ranges: AppendVec::try_with_capacity(strings)?,
+                vec: IndexedStr::try_with_capacity_slices(bytes)?,
+                ranges: IndexedVec::try_with_capacity(strings)?,
             },
             #[cfg(not(feature = "sync"))]
             map: HashTable::with_capacity(strings),
@@ -529,15 +448,9 @@ where
 {
     fn default() -> Self {
         Self {
-            #[cfg(not(feature = "sync"))]
             rangevec: RangeVecStr {
-                vec: String::new(),
-                ranges: Vec::new(),
-            },
-            #[cfg(feature = "sync")]
-            rangevec: RangeVecStr {
-                vec: AppendStr::new(),
-                ranges: AppendVec::new(),
+                vec: IndexedStr::new(),
+                ranges: IndexedVec::new(),
             },
             #[cfg(not(feature = "sync"))]
             map: HashTable::new(),
@@ -864,8 +777,8 @@ where
             return;
         }
 
-        for range in self.rangevec.ranges.iter().skip(snapshot.mark) {
-            let value: &str = &self.rangevec.vec[range.start.to_usize()..range.end.to_usize()];
+        for &range in self.rangevec.ranges.iter().skip(snapshot.mark) {
+            let value: &str = &self.rangevec.vec[range];
             let hash = self.hasher.hash_one(value);
             #[cfg(not(feature = "sync"))]
             if let Entry::Occupied(entry) = self.map.entry(
@@ -952,8 +865,8 @@ where
     {
         // TODO: Make this zero-copy?
         let mut string = String::with_capacity(self.total_len.to_usize());
-        for range in self.rangevec.ranges.iter().take(self.ranges_len.to_usize()) {
-            let s = &self.rangevec.vec[range.start.to_usize()..range.end.to_usize()];
+        for &range in self.rangevec.ranges.iter().take(self.ranges_len.to_usize()) {
+            let s = &self.rangevec.vec[range];
             string.push_str(s);
         }
 
@@ -1168,8 +1081,8 @@ where
     {
         // TODO: Make this zero-copy?
         let mut string = String::with_capacity(self.total_len.to_usize());
-        for range in self.rangevec.ranges.iter().take(self.end).skip(self.start) {
-            let s = &self.rangevec.vec[range.start.to_usize()..range.end.to_usize()];
+        for &range in self.rangevec.ranges.iter().take(self.end).skip(self.start) {
+            let s = &self.rangevec.vec[range];
             string.push_str(s);
         }
 
@@ -1324,8 +1237,8 @@ mod delta {
             let mut seq = serializer.serialize_seq(Some(self.total_len.to_usize()))?;
 
             let mut acc = Accum::default();
-            for range in self.rangevec.ranges.iter().take(self.ranges_len.to_usize()) {
-                let slice = &self.rangevec.vec[range.start.to_usize()..range.end.to_usize()];
+            for &range in self.rangevec.ranges.iter().take(self.ranges_len.to_usize()) {
+                let slice = &self.rangevec.vec[range];
                 let delta = acc.fold(slice);
                 assert_eq!(
                     delta.len(),
