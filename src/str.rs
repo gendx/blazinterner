@@ -38,52 +38,52 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_cow::CowStr;
 
 /// A handle to an interned value in an [`ArenaStr`].
-pub struct InternedStr<H = DefaultBuildHasher, I = u32> {
+pub struct InternedStr<H = DefaultBuildHasher, I = u32, J = I> {
     id: I,
-    _phantom: PhantomData<fn() -> H>,
+    _phantom: PhantomData<fn() -> (H, J)>,
 }
 
-impl<H, I: Index> Default for InternedStr<H, I> {
+impl<H, I: Index, J> Default for InternedStr<H, I, J> {
     fn default() -> Self {
         Self::new(I::MAX)
     }
 }
 
-impl<H, I: Index> Debug for InternedStr<H, I> {
+impl<H, I: Index, J> Debug for InternedStr<H, I, J> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_tuple("I").field(&self.id).finish()
     }
 }
 
-impl<H, I: Index> Clone for InternedStr<H, I> {
+impl<H, I: Index, J> Clone for InternedStr<H, I, J> {
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<H, I: Index> Copy for InternedStr<H, I> {}
+impl<H, I: Index, J> Copy for InternedStr<H, I, J> {}
 
-impl<H, I: Index> PartialEq for InternedStr<H, I> {
+impl<H, I: Index, J> PartialEq for InternedStr<H, I, J> {
     fn eq(&self, other: &Self) -> bool {
         self.id.eq(&other.id)
     }
 }
 
-impl<H, I: Index> Eq for InternedStr<H, I> {}
+impl<H, I: Index, J> Eq for InternedStr<H, I, J> {}
 
-impl<H, I: Index> PartialOrd for InternedStr<H, I> {
+impl<H, I: Index, J> PartialOrd for InternedStr<H, I, J> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl<H, I: Index> Ord for InternedStr<H, I> {
+impl<H, I: Index, J> Ord for InternedStr<H, I, J> {
     fn cmp(&self, other: &Self) -> Ordering {
         self.id.cmp(&other.id)
     }
 }
 
-impl<H, I: Index> Hash for InternedStr<H, I> {
+impl<H, I: Index, J> Hash for InternedStr<H, I, J> {
     fn hash<G>(&self, state: &mut G)
     where
         G: Hasher,
@@ -93,7 +93,7 @@ impl<H, I: Index> Hash for InternedStr<H, I> {
 }
 
 #[cfg(feature = "get-size2")]
-impl<H, I> GetSize for InternedStr<H, I>
+impl<H, I, J> GetSize for InternedStr<H, I, J>
 where
     I: GetSize,
 {
@@ -103,7 +103,7 @@ where
 }
 
 #[cfg(feature = "raw")]
-impl<H, I> InternedStr<H, I> {
+impl<H, I, J> InternedStr<H, I, J> {
     /// Creates an interned value for the given index.
     ///
     /// This is a low-level function. You should instead use the
@@ -115,7 +115,7 @@ impl<H, I> InternedStr<H, I> {
 }
 
 #[cfg(feature = "raw")]
-impl<H, I: Index> InternedStr<H, I> {
+impl<H, I: Index, J> InternedStr<H, I, J> {
     /// Obtains the underlying interning index.
     ///
     /// This is a low-level function. You should instead use the
@@ -126,7 +126,7 @@ impl<H, I: Index> InternedStr<H, I> {
     }
 }
 
-impl<H, I> InternedStr<H, I> {
+impl<H, I, J> InternedStr<H, I, J> {
     pub(crate) fn new(id: I) -> Self {
         Self {
             id,
@@ -135,14 +135,14 @@ impl<H, I> InternedStr<H, I> {
     }
 }
 
-impl<H, I: Index> InternedStr<H, I> {
+impl<H, I: Index, J> InternedStr<H, I, J> {
     pub(crate) fn id_(&self) -> I {
         self.id
     }
 }
 
 #[cfg(feature = "serde")]
-impl<H, I> Serialize for InternedStr<H, I>
+impl<H, I, J> Serialize for InternedStr<H, I, J>
 where
     I: Serialize,
 {
@@ -155,7 +155,7 @@ where
 }
 
 #[cfg(feature = "postcard-schema")]
-impl<H, I> Schema for InternedStr<H, I>
+impl<H, I, J> Schema for InternedStr<H, I, J>
 where
     I: Schema,
 {
@@ -166,7 +166,7 @@ where
 }
 
 #[cfg(feature = "serde")]
-impl<'de, H, I> Deserialize<'de> for InternedStr<H, I>
+impl<'de, H, I, J> Deserialize<'de> for InternedStr<H, I, J>
 where
     I: Deserialize<'de>,
 {
@@ -179,13 +179,24 @@ where
     }
 }
 
-#[cfg_attr(feature = "get-size2", derive(GetSize))]
-struct RangeVecStr<I> {
-    vec: IndexedStr<I>,
-    ranges: IndexedVec<CopyRange<I>, I>,
+struct RangeVecStr<I, J> {
+    vec: IndexedStr<J>,
+    ranges: IndexedVec<CopyRange<J>, I>,
 }
 
-impl<I: Index> RangeVecStr<I> {
+#[cfg(feature = "get-size2")]
+impl<I, J> GetSize for RangeVecStr<I, J>
+where
+    J: GetSize,
+{
+    fn get_heap_size_with_tracker<Tr: GetSizeTracker>(&self, tracker: Tr) -> (usize, Tr) {
+        let (size_vec, tracker) = GetSize::get_heap_size_with_tracker(&self.vec, tracker);
+        let (size_ranges, tracker) = GetSize::get_heap_size_with_tracker(&self.ranges, tracker);
+        (size_vec + size_ranges, tracker)
+    }
+}
+
+impl<I: Index, J: Index> RangeVecStr<I, J> {
     fn lookup_bytes(&self, id: I) -> &[u8] {
         let range = self.ranges[id];
         self.vec.get_bytes(range)
@@ -204,14 +215,6 @@ impl<I: Index> RangeVecStr<I> {
     fn try_lookup_str(&self, id: I) -> Option<&str> {
         let range = self.ranges.get(id)?;
         Some(&self.vec[*range])
-    }
-
-    fn iter(&self) -> impl ExactSizeIterator<Item = &str> {
-        self.ranges.iter().map(|&range| &self.vec[range])
-    }
-
-    fn iter_bytes(&self) -> impl ExactSizeIterator<Item = &[u8]> {
-        self.ranges.iter().map(|&range| self.vec.get_bytes(range))
     }
 
     #[cfg(feature = "sync")]
@@ -237,9 +240,19 @@ impl<I: Index> RangeVecStr<I> {
     }
 }
 
+impl<I, J: Index> RangeVecStr<I, J> {
+    fn iter(&self) -> impl ExactSizeIterator<Item = &str> {
+        self.ranges.iter().map(|&range| &self.vec[range])
+    }
+
+    fn iter_bytes(&self) -> impl ExactSizeIterator<Item = &[u8]> {
+        self.ranges.iter().map(|&range| self.vec.get_bytes(range))
+    }
+}
+
 /// Interning arena for strings.
-pub struct ArenaStr<H = DefaultBuildHasher, I = u32> {
-    rangevec: RangeVecStr<I>,
+pub struct ArenaStr<H = DefaultBuildHasher, I = u32, J = I> {
+    rangevec: RangeVecStr<I, J>,
     #[cfg(not(feature = "sync"))]
     map: HashTable<I>,
     #[cfg(feature = "sync")]
@@ -249,10 +262,11 @@ pub struct ArenaStr<H = DefaultBuildHasher, I = u32> {
     references: AtomicUsize,
 }
 
-impl<H, I> Clone for ArenaStr<H, I>
+impl<H, I, J> Clone for ArenaStr<H, I, J>
 where
     H: Default + BuildHasher,
     I: Index,
+    J: Index,
 {
     fn clone(&self) -> Self {
         let iter = self.iter_();
@@ -264,10 +278,11 @@ where
     }
 }
 
-impl<H, I> ArenaStr<H, I>
+impl<H, I, J> ArenaStr<H, I, J>
 where
     H: Default,
     I: Index,
+    J: Index,
 {
     /// Creates a new arena with pre-allocated space to store at least the given
     /// number of strings, totalling the given number of bytes.
@@ -281,8 +296,9 @@ where
         match Self::try_with_capacity(strings, bytes) {
             Some(x) => x,
             None => panic!(
-                "Cannot allocate an ArenaStr with capacity for {strings} strings of {bytes} bytes with indices up to {}",
-                I::MAX.to_usize()
+                "Cannot allocate an ArenaStr with capacity for {strings} strings of {bytes} bytes with indices up to {}, {}",
+                I::MAX.to_usize(),
+                J::MAX.to_usize(),
             ),
         }
     }
@@ -309,7 +325,7 @@ where
     }
 }
 
-impl<H, I> ArenaStr<H, I> {
+impl<H, I, J> ArenaStr<H, I, J> {
     /// Returns the number of strings in this arena.
     ///
     /// Note that because [`ArenaStr`] is a concurrent data structure, this is
@@ -344,7 +360,7 @@ impl<H, I> ArenaStr<H, I> {
     ///
     /// Snapshots can be diffed into a [`SnapshotStrDiff`], which is useful to
     /// serialize an arena incrementally as values are added to it.
-    pub fn snapshot(&self) -> SnapshotStr<'_, H, I> {
+    pub fn snapshot(&self) -> SnapshotStr<'_, H, I, J> {
         SnapshotStr {
             arena: self,
             mark: self.strings(),
@@ -352,7 +368,7 @@ impl<H, I> ArenaStr<H, I> {
     }
 }
 
-impl<H, I: Index> ArenaStr<H, I> {
+impl<H, I, J: Index> ArenaStr<H, I, J> {
     /// Returns an iterator over all strings in this arena, in indexing order.
     ///
     /// Note that because [`ArenaStr`] is a concurrent data structure, this is
@@ -388,10 +404,11 @@ impl<H, I: Index> ArenaStr<H, I> {
     }
 }
 
-impl<H, I> ArenaStr<H, I>
+impl<H, I, J> ArenaStr<H, I, J>
 where
     H: BuildHasher,
     I: Index,
+    J: Index,
 {
     /// Returns the given string's [`InternedStr`] handle if it is already
     /// interned.
@@ -401,7 +418,7 @@ where
     ///
     /// See also [`find_mut()`](Self::find_mut), which is more efficient if you
     /// hold a mutable reference to this arena as it avoids acquiring locks.
-    pub fn find(&self, value: &str) -> Option<InternedStr<H, I>> {
+    pub fn find(&self, value: &str) -> Option<InternedStr<H, I, J>> {
         let hash = self.hasher.hash_one(value);
         self.map
             .find(hash, |&i| self.lookup_str(i) == value)
@@ -417,7 +434,7 @@ where
     /// Contrary to [`find()`](Self::find), no locks are held internally because
     /// this function already takes an exclusive mutable reference to this
     /// arena.
-    pub fn find_mut(&mut self, value: &str) -> Option<InternedStr<H, I>> {
+    pub fn find_mut(&mut self, value: &str) -> Option<InternedStr<H, I, J>> {
         let hash = self.hasher.hash_one(value);
         #[cfg(not(feature = "sync"))]
         return self
@@ -442,7 +459,7 @@ where
     }
 }
 
-impl<H, I> Default for ArenaStr<H, I>
+impl<H, I, J> Default for ArenaStr<H, I, J>
 where
     H: Default,
 {
@@ -463,24 +480,25 @@ where
     }
 }
 
-impl<H, I: Index> Debug for ArenaStr<H, I> {
+impl<H, I, J: Index> Debug for ArenaStr<H, I, J> {
     fn fmt(&self, fmt: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         fmt.debug_list().entries(self.iter_()).finish()
     }
 }
 
-impl<H, I: Index> PartialEq for ArenaStr<H, I> {
+impl<H, I, J: Index> PartialEq for ArenaStr<H, I, J> {
     fn eq(&self, other: &Self) -> bool {
         self.iter_bytes_().eq(other.iter_bytes_())
     }
 }
 
-impl<H, I: Index> Eq for ArenaStr<H, I> {}
+impl<H, I, J: Index> Eq for ArenaStr<H, I, J> {}
 
 #[cfg(feature = "get-size2")]
-impl<H, I> GetSize for ArenaStr<H, I>
+impl<H, I, J> GetSize for ArenaStr<H, I, J>
 where
     I: GetSize,
+    J: GetSize,
 {
     fn get_heap_size_with_tracker<Tr: GetSizeTracker>(&self, tracker: Tr) -> (usize, Tr) {
         let (size_vec, tracker) = GetSize::get_heap_size_with_tracker(&self.rangevec, tracker);
@@ -490,7 +508,7 @@ where
 }
 
 #[cfg(all(feature = "debug", feature = "std"))]
-impl<H, I> ArenaStr<H, I> {
+impl<H, I, J> ArenaStr<H, I, J> {
     /// Prints a summary of the storage used by this arena to stdout.
     pub fn print_summary(&self, prefix: &str, title: &str, total_bytes: usize) {
         let strings = self.rangevec.ranges.len();
@@ -511,7 +529,7 @@ impl<H, I> ArenaStr<H, I> {
 }
 
 #[cfg(feature = "debug")]
-impl<H, I> ArenaStr<H, I> {
+impl<H, I, J> ArenaStr<H, I, J> {
     /// Returns the total number of references to strings in this arena.
     ///
     /// The underlying counter is incremented each time a string is interned,
@@ -521,10 +539,11 @@ impl<H, I> ArenaStr<H, I> {
     }
 }
 
-impl<H, I> ArenaStr<H, I>
+impl<H, I, J> ArenaStr<H, I, J>
 where
     H: BuildHasher,
     I: Index,
+    J: Index,
 {
     /// Interns the given value in this arena.
     ///
@@ -539,7 +558,7 @@ where
     /// This function panics if the arena is full (based on the index type `I`).
     /// Use [`try_intern()`](Self::try_intern) for a fallible API.
     #[cfg(feature = "sync")]
-    pub fn intern(&self, value: &str) -> InternedStr<H, I> {
+    pub fn intern(&self, value: &str) -> InternedStr<H, I, J> {
         match self.try_intern(value) {
             Some(x) => x,
             None => panic!("Cannot intern in a full ArenaStr"),
@@ -558,7 +577,7 @@ where
     /// efficient if you hold a mutable reference to this arena as it avoids
     /// acquiring locks.
     #[cfg(feature = "sync")]
-    pub fn try_intern(&self, value: &str) -> Option<InternedStr<H, I>> {
+    pub fn try_intern(&self, value: &str) -> Option<InternedStr<H, I, J>> {
         let hash = self.hasher.hash_one(value);
         let entry = self.map.entry(
             hash,
@@ -591,7 +610,7 @@ where
     ///
     /// This function panics if the arena is full (based on the index type `I`).
     /// Use [`try_intern_mut()`](Self::try_intern_mut) for a fallible API.
-    pub fn intern_mut(&mut self, value: &str) -> InternedStr<H, I> {
+    pub fn intern_mut(&mut self, value: &str) -> InternedStr<H, I, J> {
         match self.try_intern_mut(value) {
             Some(x) => x,
             None => panic!("Cannot intern in a full ArenaStr"),
@@ -609,7 +628,7 @@ where
     /// Contrary to [`try_intern()`](Self::try_intern), no locks are held
     /// internally because this function already takes an exclusive mutable
     /// reference to this arena.
-    pub fn try_intern_mut(&mut self, value: &str) -> Option<InternedStr<H, I>> {
+    pub fn try_intern_mut(&mut self, value: &str) -> Option<InternedStr<H, I, J>> {
         let hash = self.hasher.hash_one(value);
         #[cfg(not(feature = "sync"))]
         let id = {
@@ -694,7 +713,7 @@ where
     }
 }
 
-impl<H, I: Index> ArenaStr<H, I> {
+impl<H, I: Index, J: Index> ArenaStr<H, I, J> {
     /// Retrieves the given [`InternedStr`] value from this arena.
     ///
     /// The caller is responsible for ensuring that the same arena was used to
@@ -710,7 +729,7 @@ impl<H, I: Index> ArenaStr<H, I> {
     /// arena, for example because the arena was truncated, or because the
     /// interned handle was deserialized from untrusted data. Use
     /// [`try_lookup()`](Self::try_lookup) for a fallible API.
-    pub fn lookup(&self, interned: InternedStr<H, I>) -> &str {
+    pub fn lookup(&self, interned: InternedStr<H, I, J>) -> &str {
         self.lookup_str(interned.id)
     }
 
@@ -725,7 +744,7 @@ impl<H, I: Index> ArenaStr<H, I> {
     ///
     /// If you only need to access the bytes,
     /// [`try_lookup_bytes()`](Self::try_lookup_bytes) may be more efficient.
-    pub fn try_lookup(&self, interned: InternedStr<H, I>) -> Option<&str> {
+    pub fn try_lookup(&self, interned: InternedStr<H, I, J>) -> Option<&str> {
         self.rangevec.try_lookup_str(interned.id)
     }
 
@@ -741,7 +760,7 @@ impl<H, I: Index> ArenaStr<H, I> {
     /// arena, for example because the arena was truncated, or because the
     /// interned handle was deserialized from untrusted data. Use
     /// [`try_lookup_bytes()`](Self::try_lookup_bytes) for a fallible API.
-    pub fn lookup_bytes(&self, interned: InternedStr<H, I>) -> &[u8] {
+    pub fn lookup_bytes(&self, interned: InternedStr<H, I, J>) -> &[u8] {
         self.rangevec.lookup_bytes(interned.id)
     }
 
@@ -753,7 +772,7 @@ impl<H, I: Index> ArenaStr<H, I> {
     /// This returns [`None`] if the interned handle is out of bounds for this
     /// arena, for example because the arena was truncated, or because the
     /// interned handle was deserialized from untrusted data.
-    pub fn try_lookup_bytes(&self, interned: InternedStr<H, I>) -> Option<&[u8]> {
+    pub fn try_lookup_bytes(&self, interned: InternedStr<H, I, J>) -> Option<&[u8]> {
         self.rangevec.try_lookup_bytes(interned.id)
     }
 
@@ -762,17 +781,18 @@ impl<H, I: Index> ArenaStr<H, I> {
     }
 }
 
-impl<H, I> ArenaStr<H, I>
+impl<H, I, J> ArenaStr<H, I, J>
 where
     H: BuildHasher,
     I: Index,
+    J: Index,
 {
     /// Truncates this interner back to the given snapshot mark.
     ///
     /// This is a no-op if the snapshot mark is larger than this interner (for
     /// example because the interner was already truncated to a smaller snapshot
     /// in the meantime).
-    pub fn truncate(&mut self, snapshot: SnapshotStrMark<H, I>) {
+    pub fn truncate(&mut self, snapshot: SnapshotStrMark<H, I, J>) {
         if self.rangevec.ranges.len() <= snapshot.mark {
             return;
         }
@@ -803,9 +823,10 @@ where
 }
 
 #[cfg(feature = "serde")]
-impl<H, I> Serialize for ArenaStr<H, I>
+impl<H, I, J> Serialize for ArenaStr<H, I, J>
 where
-    I: Index + Serialize,
+    I: Index,
+    J: Index + Serialize,
 {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -828,16 +849,16 @@ where
 }
 
 #[cfg(feature = "postcard-schema")]
-impl<H, I> Schema for ArenaStr<H, I>
+impl<H, I, J> Schema for ArenaStr<H, I, J>
 where
-    I: Schema,
+    J: Schema,
 {
     const SCHEMA: &'static NamedType = &NamedType {
         name: "ArenaStr",
         ty: &DataModelType::Tuple(&[
             &NamedType {
                 name: "",
-                ty: &DataModelType::Seq(I::SCHEMA),
+                ty: &DataModelType::Seq(J::SCHEMA),
             },
             &NamedType {
                 name: "",
@@ -848,16 +869,17 @@ where
 }
 
 #[cfg(feature = "serde")]
-struct ArenaStrWrapper<'a, I> {
+struct ArenaStrWrapper<'a, I, J> {
     ranges_len: I,
-    total_len: I,
-    rangevec: &'a RangeVecStr<I>,
+    total_len: J,
+    rangevec: &'a RangeVecStr<I, J>,
 }
 
 #[cfg(feature = "serde")]
-impl<'a, I> Serialize for ArenaStrWrapper<'a, I>
+impl<'a, I, J> Serialize for ArenaStrWrapper<'a, I, J>
 where
     I: Index,
+    J: Index,
 {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -875,10 +897,11 @@ where
 }
 
 #[cfg(feature = "serde")]
-impl<'de, H, I> Deserialize<'de> for ArenaStr<H, I>
+impl<'de, H, I, J> Deserialize<'de> for ArenaStr<H, I, J>
 where
     H: Default + BuildHasher,
-    I: Index + Deserialize<'de>,
+    I: Index,
+    J: Index + Deserialize<'de>,
 {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -889,12 +912,13 @@ where
 }
 
 #[cfg(feature = "serde")]
-struct ArenaStrVisitor<H, I> {
-    _phantom: PhantomData<fn() -> ArenaStr<H, I>>,
+struct ArenaStrVisitor<H, I, J> {
+    #[expect(clippy::type_complexity)]
+    _phantom: PhantomData<fn() -> ArenaStr<H, I, J>>,
 }
 
 #[cfg(feature = "serde")]
-impl<H, I> ArenaStrVisitor<H, I> {
+impl<H, I, J> ArenaStrVisitor<H, I, J> {
     fn new() -> Self {
         Self {
             _phantom: PhantomData,
@@ -903,12 +927,13 @@ impl<H, I> ArenaStrVisitor<H, I> {
 }
 
 #[cfg(feature = "serde")]
-impl<'de, H, I> Visitor<'de> for ArenaStrVisitor<H, I>
+impl<'de, H, I, J> Visitor<'de> for ArenaStrVisitor<H, I, J>
 where
     H: Default + BuildHasher,
-    I: Index + Deserialize<'de>,
+    I: Index,
+    J: Index + Deserialize<'de>,
 {
-    type Value = ArenaStr<H, I>;
+    type Value = ArenaStr<H, I, J>;
 
     fn expecting(&self, formatter: &mut core::fmt::Formatter) -> core::fmt::Result {
         formatter.write_str("a pair of values")
@@ -918,7 +943,7 @@ where
     where
         A: SeqAccess<'de>,
     {
-        let sizes: Vec<I> = seq
+        let sizes: Vec<J> = seq
             .next_element()?
             .ok_or_else(|| A::Error::invalid_length(0, &self))?;
         let string: CowStr = seq
@@ -953,12 +978,13 @@ where
 ///
 /// This allows creating a difference between two snapshots, via
 /// [`SnapshotStr::diff()`].
-pub struct SnapshotStrMark<H = DefaultBuildHasher, I = u32> {
+pub struct SnapshotStrMark<H = DefaultBuildHasher, I = u32, J = I> {
     mark: usize,
-    _phantom: PhantomData<fn() -> ArenaStr<H, I>>,
+    #[expect(clippy::type_complexity)]
+    _phantom: PhantomData<fn() -> ArenaStr<H, I, J>>,
 }
 
-impl<H, I> Default for SnapshotStrMark<H, I> {
+impl<H, I, J> Default for SnapshotStrMark<H, I, J> {
     fn default() -> Self {
         Self {
             mark: 0,
@@ -967,27 +993,27 @@ impl<H, I> Default for SnapshotStrMark<H, I> {
     }
 }
 
-impl<H, I> Clone for SnapshotStrMark<H, I> {
+impl<H, I, J> Clone for SnapshotStrMark<H, I, J> {
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<H, I> Copy for SnapshotStrMark<H, I> {}
+impl<H, I, J> Copy for SnapshotStrMark<H, I, J> {}
 
 /// Snapshot of an [`ArenaStr`].
 ///
 /// This struct is created by the [`snapshot()`](ArenaStr::snapshot) function on
 /// [`ArenaStr`].
-pub struct SnapshotStr<'a, H = DefaultBuildHasher, I = u32> {
+pub struct SnapshotStr<'a, H = DefaultBuildHasher, I = u32, J = I> {
     #[cfg_attr(not(feature = "serde"), expect(dead_code))]
-    arena: &'a ArenaStr<H, I>,
+    arena: &'a ArenaStr<H, I, J>,
     mark: usize,
 }
 
-impl<H, I> SnapshotStr<'_, H, I> {
+impl<H, I, J> SnapshotStr<'_, H, I, J> {
     /// Returns the position of this snapshot in the arena.
-    pub fn mark(&self) -> SnapshotStrMark<H, I> {
+    pub fn mark(&self) -> SnapshotStrMark<H, I, J> {
         SnapshotStrMark {
             mark: self.mark,
             _phantom: PhantomData,
@@ -996,7 +1022,7 @@ impl<H, I> SnapshotStr<'_, H, I> {
 
     /// Returns the difference between this snapshot and a previous mark.
     #[cfg(feature = "serde")]
-    pub fn diff(&self, start: SnapshotStrMark<H, I>) -> SnapshotStrDiff<'_, H, I> {
+    pub fn diff(&self, start: SnapshotStrMark<H, I, J>) -> SnapshotStrDiff<'_, H, I, J> {
         SnapshotStrDiff {
             arena: self.arena,
             start: start.mark,
@@ -1010,16 +1036,17 @@ impl<H, I> SnapshotStr<'_, H, I> {
 /// This is useful to serialize an arena incrementally as more values are added
 /// to it.
 #[cfg(feature = "serde")]
-pub struct SnapshotStrDiff<'a, H = DefaultBuildHasher, I = u32> {
-    arena: &'a ArenaStr<H, I>,
+pub struct SnapshotStrDiff<'a, H = DefaultBuildHasher, I = u32, J = I> {
+    arena: &'a ArenaStr<H, I, J>,
     start: usize,
     end: usize,
 }
 
 #[cfg(feature = "serde")]
-impl<H, I> Serialize for SnapshotStrDiff<'_, H, I>
+impl<H, I, J> Serialize for SnapshotStrDiff<'_, H, I, J>
 where
-    I: Index + Serialize,
+    I: Index,
+    J: Index + Serialize,
 {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -1043,16 +1070,16 @@ where
 }
 
 #[cfg(all(feature = "serde", feature = "postcard-schema"))]
-impl<H, I> Schema for SnapshotStrDiff<'_, H, I>
+impl<H, I, J> Schema for SnapshotStrDiff<'_, H, I, J>
 where
-    I: Schema,
+    J: Schema,
 {
     const SCHEMA: &'static NamedType = &NamedType {
         name: "SnapshotStrDiff",
         ty: &DataModelType::Tuple(&[
             &NamedType {
                 name: "",
-                ty: &DataModelType::Seq(I::SCHEMA),
+                ty: &DataModelType::Seq(J::SCHEMA),
             },
             &NamedType {
                 name: "",
@@ -1063,17 +1090,18 @@ where
 }
 
 #[cfg(feature = "serde")]
-struct SnapshotArenaStrWrapper<'a, I> {
-    total_len: I,
+struct SnapshotArenaStrWrapper<'a, I, J> {
+    total_len: J,
     start: usize,
     end: usize,
-    rangevec: &'a RangeVecStr<I>,
+    rangevec: &'a RangeVecStr<I, J>,
 }
 
 #[cfg(feature = "serde")]
-impl<'a, I> Serialize for SnapshotArenaStrWrapper<'a, I>
+impl<'a, I, J> Serialize for SnapshotArenaStrWrapper<'a, I, J>
 where
     I: Index,
+    J: Index,
 {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -1093,23 +1121,24 @@ where
 /// Wrapper to extend an [`ArenaStr`] incrementally, typically by deserializing
 /// a sequence of serialized [`SnapshotStrDiff`].
 #[cfg(feature = "serde")]
-pub struct ExtendArenaStr<'a, H = DefaultBuildHasher, I = u32> {
-    arena: &'a mut ArenaStr<H, I>,
+pub struct ExtendArenaStr<'a, H = DefaultBuildHasher, I = u32, J = I> {
+    arena: &'a mut ArenaStr<H, I, J>,
 }
 
 #[cfg(feature = "serde")]
-impl<'a, H, I> ExtendArenaStr<'a, H, I> {
+impl<'a, H, I, J> ExtendArenaStr<'a, H, I, J> {
     /// Wraps the given arena to deserialize into it.
-    pub fn new(arena: &'a mut ArenaStr<H, I>) -> Self {
+    pub fn new(arena: &'a mut ArenaStr<H, I, J>) -> Self {
         Self { arena }
     }
 }
 
 #[cfg(feature = "serde")]
-impl<'de, H, I> DeserializeSeed<'de> for ExtendArenaStr<'_, H, I>
+impl<'de, H, I, J> DeserializeSeed<'de> for ExtendArenaStr<'_, H, I, J>
 where
     H: Default + BuildHasher,
-    I: Index + Deserialize<'de>,
+    I: Index,
+    J: Index + Deserialize<'de>,
 {
     type Value = ();
 
@@ -1122,15 +1151,16 @@ where
 }
 
 #[cfg(feature = "serde")]
-struct ExtendArenaStrVisitor<'a, H, I> {
-    arena: &'a mut ArenaStr<H, I>,
+struct ExtendArenaStrVisitor<'a, H, I, J> {
+    arena: &'a mut ArenaStr<H, I, J>,
 }
 
 #[cfg(feature = "serde")]
-impl<'de, H, I> Visitor<'de> for ExtendArenaStrVisitor<'_, H, I>
+impl<'de, H, I, J> Visitor<'de> for ExtendArenaStrVisitor<'_, H, I, J>
 where
     H: Default + BuildHasher,
-    I: Index + Deserialize<'de>,
+    I: Index,
+    J: Index + Deserialize<'de>,
 {
     type Value = ();
 
@@ -1142,7 +1172,7 @@ where
     where
         A: SeqAccess<'de>,
     {
-        let sizes: Vec<I> = seq
+        let sizes: Vec<J> = seq
             .next_element()?
             .ok_or_else(|| A::Error::invalid_length(0, &self))?;
         let string: CowStr = seq
@@ -1173,9 +1203,10 @@ mod delta {
     use serde::ser::SerializeSeq;
     use serde_cow::CowBytes;
 
-    impl<H, I, Accum> Serialize for DeltaEncoding<&ArenaStr<H, I>, Accum>
+    impl<H, I, J, Accum> Serialize for DeltaEncoding<&ArenaStr<H, I, J>, Accum>
     where
-        I: Index + Serialize,
+        I: Index,
+        J: Index + Serialize,
         Accum: Accumulator<Value = str, Storage = Box<str>, DeltaStorage = Box<[u8]>>,
     {
         fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
@@ -1199,9 +1230,9 @@ mod delta {
     }
 
     #[cfg(feature = "postcard-schema")]
-    impl<H, I, Accum> Schema for DeltaEncoding<&ArenaStr<H, I>, Accum>
+    impl<H, I, J, Accum> Schema for DeltaEncoding<&ArenaStr<H, I, J>, Accum>
     where
-        I: Schema,
+        J: Schema,
         Accum: Accumulator<Value = str, Storage = Box<str>, DeltaStorage = Box<[u8]>>,
     {
         const SCHEMA: &'static NamedType = &NamedType {
@@ -1209,7 +1240,7 @@ mod delta {
             ty: &DataModelType::Tuple(&[
                 &NamedType {
                     name: "",
-                    ty: &DataModelType::Seq(I::SCHEMA),
+                    ty: &DataModelType::Seq(J::SCHEMA),
                 },
                 &NamedType {
                     name: "",
@@ -1219,15 +1250,16 @@ mod delta {
         };
     }
 
-    struct ArenaStrWrapper<'a, I, Accum> {
+    struct ArenaStrWrapper<'a, I, J, Accum> {
         ranges_len: I,
-        total_len: I,
-        rangevec: &'a DeltaEncoding<&'a RangeVecStr<I>, Accum>,
+        total_len: J,
+        rangevec: &'a DeltaEncoding<&'a RangeVecStr<I, J>, Accum>,
     }
 
-    impl<'a, I, Accum> Serialize for ArenaStrWrapper<'a, I, Accum>
+    impl<'a, I, J, Accum> Serialize for ArenaStrWrapper<'a, I, J, Accum>
     where
         I: Index,
+        J: Index,
         Accum: Accumulator<Value = str, Storage = Box<str>, DeltaStorage = Box<[u8]>>,
     {
         fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
@@ -1254,10 +1286,11 @@ mod delta {
         }
     }
 
-    impl<'de, H, I, Accum> Deserialize<'de> for DeltaEncoding<ArenaStr<H, I>, Accum>
+    impl<'de, H, I, J, Accum> Deserialize<'de> for DeltaEncoding<ArenaStr<H, I, J>, Accum>
     where
         H: Default + BuildHasher,
-        I: Index + Deserialize<'de>,
+        I: Index,
+        J: Index + Deserialize<'de>,
         Accum: Accumulator<Value = str, Storage = Box<str>, Delta = [u8]>,
     {
         fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
@@ -1268,12 +1301,13 @@ mod delta {
         }
     }
 
-    struct DeltaArenaStrVisitor<H, I, Accum> {
-        _phantom: PhantomData<fn() -> ArenaStr<H, I>>,
+    struct DeltaArenaStrVisitor<H, I, J, Accum> {
+        #[expect(clippy::type_complexity)]
+        _phantom: PhantomData<fn() -> ArenaStr<H, I, J>>,
         _accum: PhantomData<Accum>,
     }
 
-    impl<H, I, Accum> DeltaArenaStrVisitor<H, I, Accum> {
+    impl<H, I, J, Accum> DeltaArenaStrVisitor<H, I, J, Accum> {
         fn new() -> Self {
             Self {
                 _phantom: PhantomData,
@@ -1282,13 +1316,14 @@ mod delta {
         }
     }
 
-    impl<'de, H, I, Accum> Visitor<'de> for DeltaArenaStrVisitor<H, I, Accum>
+    impl<'de, H, I, J, Accum> Visitor<'de> for DeltaArenaStrVisitor<H, I, J, Accum>
     where
         H: Default + BuildHasher,
-        I: Index + Deserialize<'de>,
+        I: Index,
+        J: Index + Deserialize<'de>,
         Accum: Accumulator<Value = str, Storage = Box<str>, Delta = [u8]>,
     {
-        type Value = DeltaEncoding<ArenaStr<H, I>, Accum>;
+        type Value = DeltaEncoding<ArenaStr<H, I, J>, Accum>;
 
         fn expecting(&self, formatter: &mut core::fmt::Formatter) -> core::fmt::Result {
             formatter.write_str("a pair of values")
@@ -1298,7 +1333,7 @@ mod delta {
         where
             A: SeqAccess<'de>,
         {
-            let sizes: Vec<I> = seq
+            let sizes: Vec<J> = seq
                 .next_element()?
                 .ok_or_else(|| A::Error::invalid_length(0, &self))?;
             let bytes: CowBytes = seq
@@ -1813,5 +1848,45 @@ mod test {
         assert_eq!(new_arena.lookup(c), "ccc");
         assert_eq!(new_arena.lookup(d), "dddd");
         assert_eq!(new_arena.lookup(e), "eeeee");
+    }
+
+    fn increment_str(s: &mut [u8]) {
+        for x in s.iter_mut() {
+            *x += 1;
+            if *x <= b'z' {
+                break;
+            }
+            *x = b'a';
+        }
+    }
+
+    #[test]
+    fn test_mixed_indices_all_strings() {
+        let mut arena: ArenaStr<DefaultBuildHasher, u8, u16> = ArenaStr::with_capacity(256, 65535);
+        let mut value = [b'a'; 5];
+
+        // The arena can accommodate exactly 256 strings.
+        for i in 0..=255 {
+            assert_eq!(arena.intern_mut(str::from_utf8(&value).unwrap()).id, i);
+            increment_str(&mut value);
+        }
+        assert_eq!(arena.try_intern_mut(str::from_utf8(&value).unwrap()), None);
+    }
+
+    #[test]
+    fn test_mixed_indices_all_items() {
+        let mut arena: ArenaStr<DefaultBuildHasher, u8, u16> = ArenaStr::with_capacity(256, 65535);
+        let mut value = [b'a'; 1000];
+
+        // The arena can accommodate exactly 65535 bytes.
+        for i in 0..65 {
+            assert_eq!(arena.intern_mut(str::from_utf8(&value).unwrap()).id, i);
+            increment_str(&mut value);
+        }
+        assert_eq!(
+            arena.intern_mut(str::from_utf8(&value[..535]).unwrap()).id,
+            65
+        );
+        assert_eq!(arena.try_intern_mut("!"), None);
     }
 }

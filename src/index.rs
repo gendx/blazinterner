@@ -34,6 +34,27 @@ pub trait Index: Debug + Copy + Eq + Ord + Hash + AddAssign + Sub<Output = Self>
     fn strict_add(self, other: Self) -> Self;
 }
 
+impl Index for u8 {
+    const ZERO: Self = 0;
+    const MAX: Self = u8::MAX;
+
+    fn from_usize(i: usize) -> Self {
+        i as u8
+    }
+
+    fn to_usize(&self) -> usize {
+        *self as usize
+    }
+
+    fn incr(&mut self) {
+        *self += 1;
+    }
+
+    fn strict_add(self, other: Self) -> Self {
+        self.strict_add(other)
+    }
+}
+
 impl Index for u16 {
     const ZERO: Self = 0;
     const MAX: Self = u16::MAX;
