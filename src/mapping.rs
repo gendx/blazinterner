@@ -181,10 +181,11 @@ where
     }
 }
 
-impl<T, H, I> ArenaSlice<T, H, I>
+impl<T, H, I, J> ArenaSlice<T, H, I, J>
 where
     T: Ord,
     I: Index,
+    J: Index,
 {
     /// Returns a sorted mapping of the items in this arena.
     pub fn sort(&self) -> Mapping<I> {
@@ -196,13 +197,13 @@ where
     }
 }
 
-impl<T, H, I> ArenaSlice<T, H, I>
+impl<T, H, I, J> ArenaSlice<T, H, I, J>
 where
     I: Index,
 {
     /// Returns a mapping to build an arena containing only the items of this
     /// arena that satisfy the given predicate.
-    pub fn retain(&self, filter: impl Fn(InternedSlice<T, H, I>) -> bool) -> Mapping<I> {
+    pub fn retain(&self, filter: impl Fn(InternedSlice<T, H, I, J>) -> bool) -> Mapping<I> {
         Mapping::retain(self.slices(), |i| filter(InternedSlice::new(i)))
     }
 
@@ -213,7 +214,7 @@ where
     #[cfg(feature = "retain")]
     pub fn retain_values(
         &self,
-        values: impl Iterator<Item = InternedSlice<T, H, I>>,
+        values: impl Iterator<Item = InternedSlice<T, H, I, J>>,
     ) -> Mapping<I> {
         let mut builder = self.retain_builder();
         for v in values {
@@ -225,7 +226,7 @@ where
     /// Returns a builder allowing to select items to retain, and create an
     /// arena containing only these.
     #[cfg(feature = "retain")]
-    pub fn retain_builder(&self) -> RetainSliceBuilder<T, H, I> {
+    pub fn retain_builder(&self) -> RetainSliceBuilder<T, H, I, J> {
         let len = self.slices();
         RetainSliceBuilder {
             len,
@@ -235,10 +236,11 @@ where
     }
 }
 
-impl<T, H, I> ArenaSlice<T, H, I>
+impl<T, H, I, J> ArenaSlice<T, H, I, J>
 where
     T: Default + Clone + Eq + Hash,
     I: Index,
+    J: Index,
 {
     /// Returns a re-ordered version of this arena based on the given mapping.
     ///
@@ -255,7 +257,7 @@ where
     ///
     /// See also [`map()`](Self::map) if the resulting arena uses the same hash
     /// function.
-    pub fn map_rehash<HH>(&self, mapping: &ReverseMapping<I>) -> ArenaSlice<T, HH, I>
+    pub fn map_rehash<HH>(&self, mapping: &ReverseMapping<I>) -> ArenaSlice<T, HH, I, J>
     where
         HH: Default + BuildHasher,
     {
@@ -267,10 +269,11 @@ where
     }
 }
 
-impl<T, H, I> ArenaSlice<T, H, I>
+impl<T, H, I, J> ArenaSlice<T, H, I, J>
 where
     T: Default + Eq + Hash,
     I: Index,
+    J: Index,
 {
     /// Returns a re-ordered version of this arena based on the given mapping,
     /// where each slice element is additionally transformed according to
@@ -303,7 +306,7 @@ where
         &self,
         mapping: &ReverseMapping<I>,
         f: impl Fn(&T) -> T,
-    ) -> ArenaSlice<T, HH, I>
+    ) -> ArenaSlice<T, HH, I, J>
     where
         HH: Default + BuildHasher,
     {
@@ -324,14 +327,14 @@ where
 /// This struct is created by the
 /// [`retain_builder()`](ArenaSlice::retain_builder) method on [`ArenaSlice`].
 #[cfg(feature = "retain")]
-pub struct RetainSliceBuilder<T, H = DefaultBuildHasher, I = u32> {
+pub struct RetainSliceBuilder<T, H = DefaultBuildHasher, I = u32, J = I> {
     len: usize,
     retained: BitSet,
-    _phantom: PhantomData<InternedSlice<T, H, I>>,
+    _phantom: PhantomData<InternedSlice<T, H, I, J>>,
 }
 
 #[cfg(feature = "retain")]
-impl<T, H, I> RetainSliceBuilder<T, H, I>
+impl<T, H, I, J> RetainSliceBuilder<T, H, I, J>
 where
     I: Index,
 {
@@ -339,7 +342,7 @@ where
     ///
     /// Returns [`true`] if the item is newly inserted and [`false`] if it was
     /// already inserted before.
-    pub fn insert(&mut self, value: InternedSlice<T, H, I>) -> bool {
+    pub fn insert(&mut self, value: InternedSlice<T, H, I, J>) -> bool {
         self.retained.insert(value.id_().to_usize())
     }
 
@@ -368,9 +371,10 @@ impl<T: Ord> Ord for CustomSliceOrd<'_, T> {
     }
 }
 
-impl<H, I> ArenaStr<H, I>
+impl<H, I, J> ArenaStr<H, I, J>
 where
     I: Index,
+    J: Index,
 {
     /// Returns a sorted mapping of the items in this arena.
     pub fn sort(&self) -> Mapping<I> {
@@ -383,7 +387,7 @@ where
 
     /// Returns a mapping to build an arena containing only the items of this
     /// arena that satisfy the given predicate.
-    pub fn retain(&self, filter: impl Fn(InternedStr<H, I>) -> bool) -> Mapping<I> {
+    pub fn retain(&self, filter: impl Fn(InternedStr<H, I, J>) -> bool) -> Mapping<I> {
         Mapping::retain(self.strings(), |i| filter(InternedStr::new(i)))
     }
 
@@ -392,7 +396,7 @@ where
     /// See also [`retain_builder()`](Self::retain_builder) if you need a more
     /// flexible way of adding items to retain.
     #[cfg(feature = "retain")]
-    pub fn retain_values(&self, values: impl Iterator<Item = InternedStr<H, I>>) -> Mapping<I> {
+    pub fn retain_values(&self, values: impl Iterator<Item = InternedStr<H, I, J>>) -> Mapping<I> {
         let mut builder = self.retain_builder();
         for v in values {
             builder.insert(v);
@@ -403,7 +407,7 @@ where
     /// Returns a builder allowing to select items to retain, and create an
     /// arena containing only these.
     #[cfg(feature = "retain")]
-    pub fn retain_builder(&self) -> RetainStrBuilder<H, I> {
+    pub fn retain_builder(&self) -> RetainStrBuilder<H, I, J> {
         let len = self.strings();
         RetainStrBuilder {
             len,
@@ -413,9 +417,10 @@ where
     }
 }
 
-impl<H, I> ArenaStr<H, I>
+impl<H, I, J> ArenaStr<H, I, J>
 where
     I: Index,
+    J: Index,
 {
     /// Returns a re-ordered version of this arena based on the given mapping.
     ///
@@ -432,7 +437,7 @@ where
     ///
     /// See also [`map()`](Self::map) if the resulting arena uses the same hash
     /// function.
-    pub fn map_rehash<HH>(&self, mapping: &ReverseMapping<I>) -> ArenaStr<HH, I>
+    pub fn map_rehash<HH>(&self, mapping: &ReverseMapping<I>) -> ArenaStr<HH, I, J>
     where
         HH: Default + BuildHasher,
     {
@@ -449,14 +454,14 @@ where
 /// This struct is created by the [`retain_builder()`](ArenaStr::retain_builder)
 /// method on [`ArenaStr`].
 #[cfg(feature = "retain")]
-pub struct RetainStrBuilder<H = DefaultBuildHasher, I = u32> {
+pub struct RetainStrBuilder<H = DefaultBuildHasher, I = u32, J = I> {
     len: usize,
     retained: BitSet,
-    _phantom: PhantomData<InternedStr<H, I>>,
+    _phantom: PhantomData<InternedStr<H, I, J>>,
 }
 
 #[cfg(feature = "retain")]
-impl<H, I> RetainStrBuilder<H, I>
+impl<H, I, J> RetainStrBuilder<H, I, J>
 where
     I: Index,
 {
@@ -464,7 +469,7 @@ where
     ///
     /// Returns [`true`] if the item is newly inserted and [`false`] if it was
     /// already inserted before.
-    pub fn insert(&mut self, value: InternedStr<H, I>) -> bool {
+    pub fn insert(&mut self, value: InternedStr<H, I, J>) -> bool {
         self.retained.insert(value.id_().to_usize())
     }
 
@@ -530,7 +535,10 @@ impl<I: Index> Mapping<I> {
     ///
     /// See also [`map_slice_rehash()`](Self::map_slice_rehash) if the resulting
     /// arena uses a different hash function.
-    pub fn map_slice<T, H>(&self, index: InternedSlice<T, H, I>) -> InternedSlice<T, H, I> {
+    pub fn map_slice<T, H, J>(
+        &self,
+        index: InternedSlice<T, H, I, J>,
+    ) -> InternedSlice<T, H, I, J> {
         self.forward.map_slice(index)
     }
 
@@ -538,7 +546,7 @@ impl<I: Index> Mapping<I> {
     ///
     /// See also [`map_str_rehash()`](Self::map_str_rehash) if the resulting
     /// arena uses a different hash function.
-    pub fn map_str<H>(&self, index: InternedStr<H, I>) -> InternedStr<H, I> {
+    pub fn map_str<H, J>(&self, index: InternedStr<H, I, J>) -> InternedStr<H, I, J> {
         self.forward.map_str(index)
     }
 
@@ -557,10 +565,10 @@ impl<I: Index> Mapping<I> {
     ///
     /// See also [`map_slice()`](Self::map_slice) if the resulting arena uses
     /// the same hash function.
-    pub fn map_slice_rehash<T, H, HH>(
+    pub fn map_slice_rehash<T, H, HH, J>(
         &self,
-        index: InternedSlice<T, H, I>,
-    ) -> InternedSlice<T, HH, I> {
+        index: InternedSlice<T, H, I, J>,
+    ) -> InternedSlice<T, HH, I, J> {
         self.forward.map_slice_rehash(index)
     }
 
@@ -568,7 +576,7 @@ impl<I: Index> Mapping<I> {
     ///
     /// See also [`map_str()`](Self::map_str) if the resulting arena uses the
     /// same hash function.
-    pub fn map_str_rehash<H, HH>(&self, index: InternedStr<H, I>) -> InternedStr<HH, I> {
+    pub fn map_str_rehash<H, HH, J>(&self, index: InternedStr<H, I, J>) -> InternedStr<HH, I, J> {
         self.forward.map_str_rehash(index)
     }
 
@@ -661,7 +669,10 @@ impl<I: Index> ForwardMapping<I> {
     ///
     /// See also [`map_slice_rehash()`](Self::map_slice_rehash) if the resulting
     /// arena uses a different hash function.
-    pub fn map_slice<T, H>(&self, index: InternedSlice<T, H, I>) -> InternedSlice<T, H, I> {
+    pub fn map_slice<T, H, J>(
+        &self,
+        index: InternedSlice<T, H, I, J>,
+    ) -> InternedSlice<T, H, I, J> {
         self.map_slice_rehash(index)
     }
 
@@ -669,7 +680,7 @@ impl<I: Index> ForwardMapping<I> {
     ///
     /// See also [`map_str_rehash()`](Self::map_str_rehash) if the resulting
     /// arena uses a different hash function.
-    pub fn map_str<H>(&self, index: InternedStr<H, I>) -> InternedStr<H, I> {
+    pub fn map_str<H, J>(&self, index: InternedStr<H, I, J>) -> InternedStr<H, I, J> {
         self.map_str_rehash(index)
     }
 
@@ -688,10 +699,10 @@ impl<I: Index> ForwardMapping<I> {
     ///
     /// See also [`map_slice()`](Self::map_slice) if the resulting arena uses
     /// the same hash function.
-    pub fn map_slice_rehash<T, H, HH>(
+    pub fn map_slice_rehash<T, H, HH, J>(
         &self,
-        index: InternedSlice<T, H, I>,
-    ) -> InternedSlice<T, HH, I> {
+        index: InternedSlice<T, H, I, J>,
+    ) -> InternedSlice<T, HH, I, J> {
         InternedSlice::new(self.0.at(index.id_()))
     }
 
@@ -699,7 +710,7 @@ impl<I: Index> ForwardMapping<I> {
     ///
     /// See also [`map_str()`](Self::map_str) if the resulting arena uses the
     /// same hash function.
-    pub fn map_str_rehash<H, HH>(&self, index: InternedStr<H, I>) -> InternedStr<HH, I> {
+    pub fn map_str_rehash<H, HH, J>(&self, index: InternedStr<H, I, J>) -> InternedStr<HH, I, J> {
         InternedStr::new(self.0.at(index.id_()))
     }
 
